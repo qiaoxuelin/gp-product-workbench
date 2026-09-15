@@ -1,0 +1,9 @@
+data/
+*.log
+*service-account*.json
+credentials*.json
+node_modules/
+
+dist/
+runtime/
+*.dpapi
