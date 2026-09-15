@@ -117,11 +117,12 @@ function render(){
 function decimal(m){return m?String(m.units||'0')+(m.nanos?'.'+String(m.nanos).padStart(9,'0').replace(/0+$/,''):''):'';}
 function makeMoney(value,currency){const s=String(value).trim();if(!/^\d+(\.\d{1,9})?$/.test(s))throw Error('价格格式错误');const [u,f='']=s.split('.');return {currencyCode:currency.toUpperCase(),units:String(BigInt(u)),nanos:Number(f.padEnd(9,'0'))};}
 function modal(title,body,actions=[]){
+  $('modal').returnToEditor=null;
   $('dialogTitle').textContent=title;$('dialogBody').innerHTML=body;$('dialogActions').innerHTML='';
   for(const a of actions){const b=document.createElement('button');b.textContent=a.label;b.className=a.class||'';b.onclick=async()=>{if(working)return;try{await a.run();}catch(e){showError(e.message);}};$('dialogActions').append(b);}
   if(!$('modal').open)$('modal').showModal();$('dialogBody').scrollTop=0;
 }
-function close(){if(!working)$('modal').close();}
+function close(){if(!working){const back=$('modal').returnToEditor;if(back){$('modal').returnToEditor=null;back();}else $('modal').close();}}
 function picked(){const list=draft.filter(p=>selected.has(p.productId));if(!list.length)throw Error('请先选择商品');return list;}
 function replace(products){for(const p of products){const i=draft.findIndex(x=>x.productId===p.productId);if(i<0)draft.push(p);else draft[i]=p;selected.add(p.productId);}activePlan=null;persist();render();}
 async function loadProducts(rebase=false){
@@ -173,7 +174,7 @@ function edit(p,isNew=false){
   function draw(){
     modal(isNew?'新建商品':'编辑商品 · '+p.productId,
       '<div class="form-grid"><label class="field">商品 ID<input id="editId" value="'+esc(p.productId)+'" '+(!isNew?'readonly':'')+' placeholder="coins_100"></label><label class="field">所属应用<input readonly value="'+esc(p.packageName)+'"></label></div>'+
-      '<div class="section-title">多语言名称与描述 <button id="addLocale">＋ 添加语言</button></div><div class="help">语言代码 / 名称（最多 55 字符）/ 描述（最多 200 字符）</div><div id="locales">'+p.listings.map((l,i)=>'<div class="edit-row locale-row"><select aria-label="语言代码" data-l="'+i+'" data-k="languageCode">'+choiceOptions(LANGUAGE_CODES,l.languageCode,'language','请选择语言')+'</select><input aria-label="商品名称" data-l="'+i+'" data-k="title" value="'+esc(l.title)+'"><textarea aria-label="商品描述" data-l="'+i+'" data-k="description">'+esc(l.description)+'</textarea><button data-del-l="'+i+'" aria-label="删除语言">×</button></div>').join('')+'</div>'+
+      '<div class="section-title">多语言名称与描述 <div class="section-actions"><button id="editLanguages">多语言模板</button> <button id="addLocale">＋ 添加语言</button></div></div><div class="help">语言代码 / 名称（最多 55 字符）/ 描述（最多 200 字符）</div><div id="locales">'+p.listings.map((l,i)=>'<div class="edit-row locale-row"><select aria-label="语言代码" data-l="'+i+'" data-k="languageCode">'+choiceOptions(LANGUAGE_CODES,l.languageCode,'language','请选择语言')+'</select><input aria-label="商品名称" data-l="'+i+'" data-k="title" value="'+esc(l.title)+'"><textarea aria-label="商品描述" data-l="'+i+'" data-k="description">'+esc(l.description)+'</textarea><button data-del-l="'+i+'" aria-label="删除语言">×</button></div>').join('')+'</div>'+
       '<div class="section-title">购买选项与地区价格 <button id="addOption">＋ 添加购买选项</button></div>'+p.purchaseOptions.map((o,i)=>'<section class="option-box"><div class="option-head"><b>选项</b><input type="text" aria-label="购买选项 ID" data-oid="'+i+'" value="'+esc(o.purchaseOptionId)+'" '+(old(originalId)?.purchaseOptions.some(x=>x.purchaseOptionId===o.purchaseOptionId)?'readonly':'')+'><span class="pill">'+esc(o.state||'DRAFT')+'</span>'+(o.buyOption?'<label><input type="checkbox" data-legacy="'+i+'" '+(o.buyOption.legacyCompatible?'checked':'')+'>兼容旧版 Billing</label><label><input type="checkbox" data-multi="'+i+'" '+(o.buyOption.multiQuantityEnabled?'checked':'')+'>允许多件购买</label>':'<span>租赁选项 · 在高级 JSON 中编辑租期</span>')+'</div><div class="region-tools"><input type="search" data-region-search="'+i+'" aria-label="搜索购买选项 '+esc(o.purchaseOptionId)+' 的地区" placeholder="搜索地区名称、代码或币种"><span data-region-count="'+i+'">共 '+o.regionalPricingAndAvailabilityConfigs.length+' 个地区</span></div><div class="help">地区 / 币种 / 价格 / 销售状态</div><div class="region-scroll">'+o.regionalPricingAndAvailabilityConfigs.map((r,j)=>'<div class="edit-row region-row"><select aria-label="地区代码" data-o="'+i+'" data-r="'+j+'" data-k="regionCode">'+choiceOptions(REGION_CODES,r.regionCode,'region')+'</select><select aria-label="币种" data-o="'+i+'" data-r="'+j+'" data-k="currencyCode">'+choiceOptions(currencyCodes(),r.price?.currencyCode,'currency')+'</select><input aria-label="地区价格" data-o="'+i+'" data-r="'+j+'" data-k="price" value="'+esc(decimal(r.price))+'"><select aria-label="地区销售状态" data-o="'+i+'" data-r="'+j+'" data-k="availability">'+['AVAILABLE','NO_LONGER_AVAILABLE','AVAILABLE_IF_RELEASED','AVAILABLE_FOR_OFFERS_ONLY'].map(a=>'<option '+(r.availability===a?'selected':'')+' value="'+a+'">'+({AVAILABLE:'可销售',NO_LONGER_AVAILABLE:'停止销售',AVAILABLE_IF_RELEASED:'预购发布后可售',AVAILABLE_FOR_OFFERS_ONLY:'仅优惠可售'}[a])+'</option>').join('')+'</select><button data-del-r="'+i+','+j+'" aria-label="移除地区行">×</button></div>').join('')+'</div><button data-add-r="'+i+'">＋ 添加地区</button></section>').join('')+
       '<p class="help">修改只保存为本地草稿。已有购买选项的启用/停用请使用列表中的批量操作。</p><details><summary>高级字段（标签、税务、租赁、新地区规则等）</summary><p class="help">JSON 编辑保留已有字段；商品图标和促销优惠不在本版编辑范围。</p><button id="advanced">打开完整 JSON 编辑器</button></details>',[
       {label:'取消',run:close},{label:'保存草稿',class:'primary',run:async()=>{pull();if(isNew&&draft.some(x=>x.productId===p.productId))throw Error('商品 ID 已存在');await api('validate',{product:p});replace([p]);close();status('商品已保存为本地草稿');}}]);
@@ -182,6 +183,7 @@ function edit(p,isNew=false){
       box.querySelectorAll('.region-row').forEach(row=>{const region=row.querySelector('[data-k="regionCode"]').value,currency=row.querySelector('[data-k="currencyCode"]').value;row.hidden=!(choiceLabel(region,'region')+' '+choiceLabel(currency,'currency')).toLowerCase().includes(query);if(!row.hidden)count++;});
       box.querySelector('[data-region-count]').textContent='显示 '+count+' 个地区';
     });
+    bind('editLanguages',()=>{pull();if(!p.productId)throw Error('请先填写商品 ID');languageDialog({products:[p],back:draw,apply:products=>{p.listings=clone(products[0].listings);draw();}});});
     bind('addLocale',()=>{pull();p.listings.push({languageCode:'',title:'',description:''});draw();});
     bind('addOption',()=>{pull();p.purchaseOptions.push({purchaseOptionId:'buy-'+(p.purchaseOptions.length+1),buyOption:{},regionalPricingAndAvailabilityConfigs:[]});draw();});
     document.querySelectorAll('[data-del-l]').forEach(el=>el.onclick=()=>{try{pull();p.listings.splice(Number(el.dataset.delL),1);draw();}catch(e){showError(e.message);}});
@@ -260,11 +262,11 @@ function changeState(target){
   }}]);
 }
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-function languageDialog(){
-  const scope=clone(selected.size?picked():draft);
+function languageDialog(editor=null){
+  const scope=clone(editor?editor.products:selected.size?picked():draft);
   if(!scope.length)throw Error('请先读取或创建商品，再下载多语言模板');
-  modal('多语言模板导入 · '+scope.length+' 个商品','<p class="help">当前范围：'+(selected.size?'所选商品':'当前项目的全部商品')+'。每行填写一个商品的一种语言；仅更新名称和描述，未列出的语言、地区和价格均保留。</p><ol class="help"><li>下载模板，已有名称和描述会自动填入。</li><li>用 Excel 等工具编辑，另存为 CSV UTF-8。四列表头保持不变。</li><li>选择文件，检查导入预览后应用到本地草稿。</li></ol><div class="form-grid">'+multiMarkup('templateLanguages','模板中追加的语言（可选，多选）')+'<div class="wide"><button id="downloadLanguages">下载多语言 CSV 模板</button></div><label class="field wide">上传已填写的模板<input id="languageFile" type="file" accept=".csv,text/csv"></label></div><p class="help">列：productId / languageCode / title / description。名称最多 55 字符，描述最多 200 字符；新增语言的空白内容需要填写后再导入。同一商品同一语言重复且内容不同会报错。</p>',[
-    {label:'取消',run:close},{label:'检查并预览导入',class:'primary',run:async()=>{
+  modal('多语言模板导入 · '+scope.length+' 个商品','<p class="help">当前范围：'+(editor?'当前编辑商品 '+esc(scope[0].productId):selected.size?'所选商品':'当前项目的全部商品')+'。每行填写一个商品的一种语言；仅更新名称和描述，未列出的语言、地区和价格均保留。</p><ol class="help"><li>下载模板，已有名称和描述会自动填入。</li><li>用 Excel 等工具编辑，另存为 CSV UTF-8。四列表头保持不变。</li><li>选择文件，检查导入预览后应用到本地草稿。</li></ol><div class="form-grid">'+multiMarkup('templateLanguages','模板中追加的语言（可选，多选）')+'<div class="wide"><button id="downloadLanguages">下载多语言 CSV 模板</button></div><label class="field wide">上传已填写的模板<input id="languageFile" type="file" accept=".csv,text/csv"></label></div><p class="help">列：productId / languageCode / title / description。名称最多 55 字符，描述最多 200 字符；新增语言的空白内容需要填写后再导入。同一商品同一语言重复且内容不同会报错。</p>',[
+    {label:editor?'返回商品编辑':'取消',run:close},{label:'检查并预览导入',class:'primary',run:async()=>{
       const file=$('languageFile').files[0];if(!file)throw Error('请选择多语言 CSV 模板');
       if(file.size>6*1024*1024)throw Error('文件超过 6MB，请分批导入');
       const result=await api('listings/import',{mode,csv:await file.text(),existing:scope});
@@ -274,9 +276,11 @@ function languageDialog(){
         if(!same(before,l))rows.push({id:p.productId,language:l.languageCode,before,after:l});
       }
       if(!rows.length)throw Error('模板内容与当前草稿一致，没有需要导入的变化');
-      modal('多语言导入预览 · '+rows.length+' 条变化','<p class="help">确认后只更新本地草稿。之后仍需“预览并提交”才会修改 Google 商品。</p><table class="diff-table"><thead><tr><th>商品 / 语言</th><th>修改前</th><th>修改后</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.id+' / '+r.language)+'</td><td>'+esc(r.before?r.before.title+'\n'+r.before.description:'新增语言')+'</td><td>'+esc(r.after.title+'\n'+r.after.description)+'</td></tr>').join('')+'</tbody></table>',[{label:'取消',run:close},{label:'应用到草稿',class:'primary',run:()=>{replace(result.products);close();status('已更新 '+result.products.length+' 个商品的 '+rows.length+' 条多语言内容');}}]);
+      modal('多语言导入预览 · '+rows.length+' 条变化','<p class="help">'+(editor?'确认后返回商品表单，请点击保存草稿。':'确认后只更新本地草稿。')+'之后仍需“预览并提交”才会修改 Google 商品。</p><table class="diff-table"><thead><tr><th>商品 / 语言</th><th>修改前</th><th>修改后</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.id+' / '+r.language)+'</td><td>'+esc(r.before?r.before.title+'\n'+r.before.description:'新增语言')+'</td><td>'+esc(r.after.title+'\n'+r.after.description)+'</td></tr>').join('')+'</tbody></table>',[{label:editor?'返回商品编辑':'取消',run:close},{label:editor?'应用到商品表单':'应用到草稿',class:'primary',run:()=>{if(editor){editor.apply(result.products);status('多语言已应用到表单，请保存草稿');return;}replace(result.products);close();status('已更新 '+result.products.length+' 个商品的 '+rows.length+' 条多语言内容');}}]);
+      if(editor)$('modal').returnToEditor=editor.back;
     }}
   ]);
+  if(editor)$('modal').returnToEditor=editor.back;
   initMulti('templateLanguages',LANGUAGE_CODES.concat(scope.flatMap(p=>p.listings.map(l=>l.languageCode))),[],'language');
   bind('downloadLanguages',async()=>{
     const languages=$('templateLanguages').selectedValues();
@@ -351,7 +355,7 @@ async function history(){
 async function init(){
   token=(await(await fetch('/api/session')).json()).token;settings=await api('config');await restoreVisit();restore();
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
-  $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();});
+  $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});
   bind('resetFilters',()=>{catalogFilter='all';search='';$('search').value='';render();});
   bind('clearSelection',()=>{selected.clear();render();});

@@ -258,3 +258,32 @@ test('catalog filters retain explicit selection scope and region search preserve
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:'data/ui-polished-mobile.png',fullPage:true});
 });
+
+test('single product template preserves unsaved edits and returns to editor before saving',async({page})=>{
+  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.locator('[data-select="coins_550"]').check();
+  await page.locator('[data-edit="coins_100"]').click();
+  await page.locator('[data-k="price"]').first().fill('3.99');
+  await page.locator('#editLanguages').click();
+  await expect(page.locator('#dialogBody')).toContainText('当前编辑商品 coins_100');
+  const downloadEvent=page.waitForEvent('download');
+  await page.locator('#downloadLanguages').click();
+  const download=await downloadEvent;const stream=await download.createReadStream();const chunks=[];
+  for await(const chunk of stream)chunks.push(chunk);
+  const csv=Buffer.concat(chunks).toString('utf8');expect(csv).toContain('coins_100');expect(csv).not.toContain('coins_550');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#editId')).toHaveValue('coins_100');
+  await expect(page.locator('[data-k="price"]').first()).toHaveValue('3.99');
+  await page.locator('#editLanguages').click();
+  await page.locator('#languageFile').setInputFiles({name:'single.csv',mimeType:'text/csv',buffer:Buffer.from('productId,languageCode,title,description\ncoins_100,ja-JP,100コイン,100コインを獲得')});
+  await page.getByRole('button',{name:'检查并预览导入'}).click();
+  await expect(page.locator('#dialogTitle')).toContainText('多语言导入预览');
+  await page.getByRole('button',{name:'应用到商品表单'}).click();
+  await expect(page.locator('[data-k="languageCode"]').last()).toHaveValue('ja-JP');
+  await expect(page.locator('[data-k="price"]').first()).toHaveValue('3.99');
+  await expect(page.locator('#dirtyCount')).toHaveText('0');
+  await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await expect(page.locator('#dirtyCount')).toHaveText('1');
+  await page.locator('[data-edit="coins_550"]').click();
+  await expect(page.locator('[data-k="languageCode"]')).toHaveCount(2);
+});
