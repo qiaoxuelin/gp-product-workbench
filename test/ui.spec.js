@@ -229,3 +229,32 @@ test('selection controls save language and regional price changes',async({page})
   await expect(page.locator('[data-k="price"]').last()).toHaveValue('150');
   await page.screenshot({path:'data/ui-edit-options.png',fullPage:true});
 });
+
+test('catalog filters retain explicit selection scope and region search preserves hidden values',async({page})=>{
+  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await expect(page.locator('#price')).toBeDisabled();
+  await page.locator('[data-select="coins_100"]').check();
+  await page.locator('#search').fill('REMOVE_ADS');
+  await expect(page.locator('#resultCount')).toHaveText('显示 1 / 3 个商品');
+  await expect(page.locator('#selectionHint')).toContainText('筛选外 1 个');
+  await page.locator('#selectAll').check();
+  await expect(page.locator('#selectedCount')).toHaveText('2');
+  await expect(page.locator('#copy')).toBeDisabled();
+  await page.locator('#resetFilters').click();
+  await page.locator('[data-filter="selected"]').click();
+  await expect(page.locator('#products tr')).toHaveCount(2);
+  await page.locator('#clearSelection').click();
+  await expect(page.locator('#empty')).toContainText('没有匹配的商品');
+  await page.locator('#resetFilters').click();
+  await page.locator('[data-edit="coins_100"]').click();
+  await page.locator('[data-region-search="0"]').fill('美元');
+  await expect(page.locator('.region-row:visible')).toHaveCount(1);
+  await page.locator('[data-k="price"]').first().fill('1.99');
+  await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await page.locator('[data-filter="dirty"]').click();
+  await expect(page.locator('#products tr')).toHaveCount(1);
+  await expect(page.locator('#products')).toContainText('HKD 7');
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:'data/ui-polished-mobile.png',fullPage:true});
+});

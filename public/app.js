@@ -5,6 +5,9 @@ let token='', settings={profiles:[],activeId:'',current:{}}, mode='demo',base=[]
 const key=()=> 'gp-workspace-v1:'+mode+':'+(mode==='demo'?'demo':settings.activeId+':'+settings.current.packageName);
 const old=id=>base.find(p=>p.productId===id)||null;
 const dirty=p=>!same(p,old(p.productId))||Object.keys(states[p.productId]||{}).length>0;
+let catalogFilter='all';
+function visibleProducts(){return draft.filter(p=>(p.productId+' '+p.listings.map(l=>l.title).join(' ')).toLowerCase().includes(search.toLowerCase())&&(catalogFilter==='all'||(catalogFilter==='dirty'?dirty(p):selected.has(p.productId))));}
+function syncActions(){for(const id of ['copy','price','activate','deactivate','discard']){const disabled=working||!selected.size||(id==='copy'&&selected.size!==1);$(id).disabled=disabled;$(id).title=!selected.size?'请先勾选商品':id==='copy'&&selected.size!==1?'请选择一个商品作为复制模板':'';}$('clearSelection').hidden=!selected.size;document.querySelector('.batch').classList.toggle('has-selection',selected.size>0);}
 function status(message,error=false){$('status').textContent=message;$('status').className=error?'error':'';}
 async function api(url,body={}){
   // Freeze the target and payload across a retry; only a request rejected before routing is retried.
@@ -46,7 +49,7 @@ function initMulti(id,codes,values,type){
   const draw=()=>{
     root.querySelector('.choice-summary').textContent='已选 '+chosen.size+' 项'+(chosen.size?'：'+[...chosen].join('、'):'');
     root.querySelector('.choice-list').innerHTML=matches().map(c=>'<label><input type="checkbox" value="'+esc(c)+'" '+(chosen.has(c)?'checked':'')+'><span>'+esc(choiceLabel(c,type))+'</span></label>').join('')||'<p class="help">没有匹配选项</p>';
-    root.querySelectorAll('input[type=checkbox]').forEach(el=>el.onchange=()=>{el.checked?chosen.add(el.value):chosen.delete(el.value);draw();});
+    root.querySelectorAll('input[type=checkbox]').forEach(el=>el.onchange=()=>{el.checked?chosen.add(el.value):chosen.delete(el.value);root.querySelector('.choice-summary').textContent='已选 '+chosen.size+' 项'+(chosen.size?'：'+[...chosen].join('、'):'');});
   };
   input.oninput=draw;
   root.querySelector('[data-all]').onclick=()=>{matches().forEach(c=>chosen.add(c));draw();};
@@ -89,10 +92,12 @@ function renderHeader(){
   $('package').textContent=mode==='demo'?'com.example.demo':settings.current.packageName||'未配置包名';
   $('modeBanner').className='banner'+(mode==='live'?' live':'');
   $('modeBanner').innerHTML=mode==='demo'?'<b>演示工作区</b><span>示例商品保存在本机，所有操作均不调用 Google 商品写入接口。</span><button id="connectLink">连接我的应用 →</button>':'<b>真实项目 · '+esc(settings.current.name||'未配置')+'</b><span>草稿按项目保存。预览确认后才会修改 Google Play 商品。</span><button id="connectLink">管理项目 →</button>';
-  bind('connectLink',()=>openSettings());
+  bind('connectLink',()=>openSettings());syncActions();
 }
 function render(){
-  renderHeader();const list=draft.filter(p=>(p.productId+' '+p.listings.map(l=>l.title).join(' ')).toLowerCase().includes(search));
+  renderHeader();const list=visibleProducts();
+  $('resultCount').textContent='显示 '+list.length+' / '+draft.length+' 个商品';$('resetFilters').hidden=!search&&catalogFilter==='all';
+  document.querySelectorAll('[data-filter]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.filter===catalogFilter));
   $('total').textContent=draft.length;$('selectedCount').textContent=selected.size;
   const count=draft.filter(dirty).length;$('dirtyCount').textContent=count;$('pendingBadge').textContent=count;
   $('selectionHint').textContent=selected.size?'已选择 '+selected.size+' 个商品':'选择商品后执行批量操作';
@@ -101,6 +106,9 @@ function render(){
     return '<tr class="'+(selected.has(p.productId)?'selected':'')+'"><td><input type="checkbox" aria-label="选择 '+esc(p.productId)+'" data-select="'+esc(p.productId)+'" '+(selected.has(p.productId)?'checked':'')+'></td><td><strong>'+esc(p.listings[0]?.title||p.productId)+'</strong><small>'+esc(p.productId)+'</small></td><td><span class="pill">'+p.purchaseOptions.length+' 个选项</span><small>'+esc(o?.purchaseOptionId||'')+' · '+p.listings.length+' 种语言</small></td><td>'+price.slice(0,2).map(r=>'<div class="price-line"><span>'+esc(r.regionCode)+'</span>'+esc(r.price?.currencyCode)+' '+esc(decimal(r.price))+'</div>').join('')+(price.length>2?'<small>共 '+price.length+' 个地区</small>':'')+'</td><td><span class="pill '+(s==='ACTIVE'?'green':'')+'">'+esc(({ACTIVE:'已启用',DRAFT:'草稿',INACTIVE:'已停用',INACTIVE_PUBLISHED:'已停用 · 兼容',MIXED:'多种状态'}[s]||s))+'</span></td><td>'+(dirty(p)?'<span class="pill orange">'+(old(p.productId)?'待更新':'待创建')+'</span>':'<span class="pill">已同步</span>')+'</td><td><button data-edit="'+esc(p.productId)+'">编辑</button></td></tr>';
   }).join('');
   $('empty').hidden=list.length>0;
+  $('empty').innerHTML=draft.length?'<div class="empty-symbol">⌕</div><h2>没有匹配的商品</h2><p>试试其他名称、商品 ID，或清除当前筛选。</p>':'<div class="empty-symbol">＋</div><h2>从读取商品开始</h2><p>连接应用后读取商品，或创建第一个商品草稿。</p>';
+  const hiddenSelection=[...selected].filter(id=>!list.some(p=>p.productId===id)).length;
+  if(hiddenSelection)$('selectionHint').textContent+='（含筛选外 '+hiddenSelection+' 个）';
   $('selectAll').checked=list.length>0&&list.every(p=>selected.has(p.productId));
   $('selectAll').indeterminate=list.some(p=>selected.has(p.productId))&&!$('selectAll').checked;
   document.querySelectorAll('[data-select]').forEach(el=>el.onchange=()=>{el.checked?selected.add(el.dataset.select):selected.delete(el.dataset.select);render();});
@@ -166,9 +174,14 @@ function edit(p,isNew=false){
     modal(isNew?'新建商品':'编辑商品 · '+p.productId,
       '<div class="form-grid"><label class="field">商品 ID<input id="editId" value="'+esc(p.productId)+'" '+(!isNew?'readonly':'')+' placeholder="coins_100"></label><label class="field">所属应用<input readonly value="'+esc(p.packageName)+'"></label></div>'+
       '<div class="section-title">多语言名称与描述 <button id="addLocale">＋ 添加语言</button></div><div class="help">语言代码 / 名称（最多 55 字符）/ 描述（最多 200 字符）</div><div id="locales">'+p.listings.map((l,i)=>'<div class="edit-row locale-row"><select aria-label="语言代码" data-l="'+i+'" data-k="languageCode">'+choiceOptions(LANGUAGE_CODES,l.languageCode,'language','请选择语言')+'</select><input aria-label="商品名称" data-l="'+i+'" data-k="title" value="'+esc(l.title)+'"><textarea aria-label="商品描述" data-l="'+i+'" data-k="description">'+esc(l.description)+'</textarea><button data-del-l="'+i+'" aria-label="删除语言">×</button></div>').join('')+'</div>'+
-      '<div class="section-title">购买选项与地区价格 <button id="addOption">＋ 添加购买选项</button></div>'+p.purchaseOptions.map((o,i)=>'<section class="option-box"><div class="option-head"><b>选项</b><input type="text" aria-label="购买选项 ID" data-oid="'+i+'" value="'+esc(o.purchaseOptionId)+'" '+(old(originalId)?.purchaseOptions.some(x=>x.purchaseOptionId===o.purchaseOptionId)?'readonly':'')+'><span class="pill">'+esc(o.state||'DRAFT')+'</span>'+(o.buyOption?'<label><input type="checkbox" data-legacy="'+i+'" '+(o.buyOption.legacyCompatible?'checked':'')+'>兼容旧版 Billing</label><label><input type="checkbox" data-multi="'+i+'" '+(o.buyOption.multiQuantityEnabled?'checked':'')+'>允许多件购买</label>':'<span>租赁选项 · 在高级 JSON 中编辑租期</span>')+'</div><div class="help">地区 / 币种 / 价格 / 销售状态</div>'+o.regionalPricingAndAvailabilityConfigs.map((r,j)=>'<div class="edit-row region-row"><select aria-label="地区代码" data-o="'+i+'" data-r="'+j+'" data-k="regionCode">'+choiceOptions(REGION_CODES,r.regionCode,'region')+'</select><select aria-label="币种" data-o="'+i+'" data-r="'+j+'" data-k="currencyCode">'+choiceOptions(currencyCodes(),r.price?.currencyCode,'currency')+'</select><input aria-label="地区价格" data-o="'+i+'" data-r="'+j+'" data-k="price" value="'+esc(decimal(r.price))+'"><select aria-label="地区销售状态" data-o="'+i+'" data-r="'+j+'" data-k="availability">'+['AVAILABLE','NO_LONGER_AVAILABLE','AVAILABLE_IF_RELEASED','AVAILABLE_FOR_OFFERS_ONLY'].map(a=>'<option '+(r.availability===a?'selected':'')+' value="'+a+'">'+({AVAILABLE:'可销售',NO_LONGER_AVAILABLE:'停止销售',AVAILABLE_IF_RELEASED:'预购发布后可售',AVAILABLE_FOR_OFFERS_ONLY:'仅优惠可售'}[a])+'</option>').join('')+'</select><button data-del-r="'+i+','+j+'" aria-label="移除地区行">×</button></div>').join('')+'<button data-add-r="'+i+'">＋ 添加地区</button></section>').join('')+
+      '<div class="section-title">购买选项与地区价格 <button id="addOption">＋ 添加购买选项</button></div>'+p.purchaseOptions.map((o,i)=>'<section class="option-box"><div class="option-head"><b>选项</b><input type="text" aria-label="购买选项 ID" data-oid="'+i+'" value="'+esc(o.purchaseOptionId)+'" '+(old(originalId)?.purchaseOptions.some(x=>x.purchaseOptionId===o.purchaseOptionId)?'readonly':'')+'><span class="pill">'+esc(o.state||'DRAFT')+'</span>'+(o.buyOption?'<label><input type="checkbox" data-legacy="'+i+'" '+(o.buyOption.legacyCompatible?'checked':'')+'>兼容旧版 Billing</label><label><input type="checkbox" data-multi="'+i+'" '+(o.buyOption.multiQuantityEnabled?'checked':'')+'>允许多件购买</label>':'<span>租赁选项 · 在高级 JSON 中编辑租期</span>')+'</div><div class="region-tools"><input type="search" data-region-search="'+i+'" aria-label="搜索购买选项 '+esc(o.purchaseOptionId)+' 的地区" placeholder="搜索地区名称、代码或币种"><span data-region-count="'+i+'">共 '+o.regionalPricingAndAvailabilityConfigs.length+' 个地区</span></div><div class="help">地区 / 币种 / 价格 / 销售状态</div><div class="region-scroll">'+o.regionalPricingAndAvailabilityConfigs.map((r,j)=>'<div class="edit-row region-row"><select aria-label="地区代码" data-o="'+i+'" data-r="'+j+'" data-k="regionCode">'+choiceOptions(REGION_CODES,r.regionCode,'region')+'</select><select aria-label="币种" data-o="'+i+'" data-r="'+j+'" data-k="currencyCode">'+choiceOptions(currencyCodes(),r.price?.currencyCode,'currency')+'</select><input aria-label="地区价格" data-o="'+i+'" data-r="'+j+'" data-k="price" value="'+esc(decimal(r.price))+'"><select aria-label="地区销售状态" data-o="'+i+'" data-r="'+j+'" data-k="availability">'+['AVAILABLE','NO_LONGER_AVAILABLE','AVAILABLE_IF_RELEASED','AVAILABLE_FOR_OFFERS_ONLY'].map(a=>'<option '+(r.availability===a?'selected':'')+' value="'+a+'">'+({AVAILABLE:'可销售',NO_LONGER_AVAILABLE:'停止销售',AVAILABLE_IF_RELEASED:'预购发布后可售',AVAILABLE_FOR_OFFERS_ONLY:'仅优惠可售'}[a])+'</option>').join('')+'</select><button data-del-r="'+i+','+j+'" aria-label="移除地区行">×</button></div>').join('')+'</div><button data-add-r="'+i+'">＋ 添加地区</button></section>').join('')+
       '<p class="help">修改只保存为本地草稿。已有购买选项的启用/停用请使用列表中的批量操作。</p><details><summary>高级字段（标签、税务、租赁、新地区规则等）</summary><p class="help">JSON 编辑保留已有字段；商品图标和促销优惠不在本版编辑范围。</p><button id="advanced">打开完整 JSON 编辑器</button></details>',[
       {label:'取消',run:close},{label:'保存草稿',class:'primary',run:async()=>{pull();if(isNew&&draft.some(x=>x.productId===p.productId))throw Error('商品 ID 已存在');await api('validate',{product:p});replace([p]);close();status('商品已保存为本地草稿');}}]);
+    document.querySelectorAll('[data-region-search]').forEach(input=>input.oninput=()=>{
+      const box=input.closest('.option-box'),query=input.value.trim().toLowerCase();let count=0;
+      box.querySelectorAll('.region-row').forEach(row=>{const region=row.querySelector('[data-k="regionCode"]').value,currency=row.querySelector('[data-k="currencyCode"]').value;row.hidden=!(choiceLabel(region,'region')+' '+choiceLabel(currency,'currency')).toLowerCase().includes(query);if(!row.hidden)count++;});
+      box.querySelector('[data-region-count]').textContent='显示 '+count+' 个地区';
+    });
     bind('addLocale',()=>{pull();p.listings.push({languageCode:'',title:'',description:''});draw();});
     bind('addOption',()=>{pull();p.purchaseOptions.push({purchaseOptionId:'buy-'+(p.purchaseOptions.length+1),buyOption:{},regionalPricingAndAvailabilityConfigs:[]});draw();});
     document.querySelectorAll('[data-del-l]').forEach(el=>el.onclick=()=>{try{pull();p.listings.splice(Number(el.dataset.delL),1);draw();}catch(e){showError(e.message);}});
@@ -339,8 +352,11 @@ async function init(){
   token=(await(await fetch('/api/session')).json()).token;settings=await api('config');await restoreVisit();restore();
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();});
+  document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});
+  bind('resetFilters',()=>{catalogFilter='all';search='';$('search').value='';render();});
+  bind('clearSelection',()=>{selected.clear();render();});
   $('search').oninput=e=>{search=e.target.value;render();};
-  $('selectAll').onchange=e=>{draft.filter(p=>(p.productId+' '+p.listings.map(l=>l.title).join(' ')).toLowerCase().includes(search)).forEach(p=>e.target.checked?selected.add(p.productId):selected.delete(p.productId));render();};
+  $('selectAll').onchange=e=>{visibleProducts().forEach(p=>e.target.checked?selected.add(p.productId):selected.delete(p.productId));render();};
   $('mode').onchange=async()=>{if(working)return;persist();mode=$('mode').value;restore();status('已切换工作区');if(mode==='demo'&&!draft.length){try{await loadProducts();}catch(e){showError(e.message);}}};
   $('project').onchange=async()=>{if(working)return;try{persist();settings=await api('config/switch',{id:$('project').value});restore();status('已切换到 '+settings.current.name+'；点击读取商品加载此项目');}catch(e){showError(e.message);render();}};
   if(!draft.length)await loadProducts();else status('已恢复本机草稿');
