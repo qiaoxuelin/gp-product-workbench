@@ -5,8 +5,9 @@ let token='', settings={profiles:[],activeId:'',current:{}}, mode='demo',base=[]
 const key=()=> 'gp-workspace-v1:'+mode+':'+(mode==='demo'?'demo':settings.activeId+':'+settings.current.packageName);
 const old=id=>base.find(p=>p.productId===id)||null;
 const dirty=p=>!same(p,old(p.productId))||Object.keys(states[p.productId]||{}).length>0;
-let catalogFilter='all';
-function visibleProducts(){return draft.filter(p=>(p.productId+' '+p.listings.map(l=>l.title).join(' ')).toLowerCase().includes(search.toLowerCase())&&(catalogFilter==='all'||(catalogFilter==='dirty'?dirty(p):selected.has(p.productId))));}
+let catalogFilter='all',productStateFilter='all';
+function matchesProductState(p){return productStateFilter==='all'||p.purchaseOptions.some(o=>{const state=o.state||'DRAFT';return state===productStateFilter||(productStateFilter==='INACTIVE'&&state==='INACTIVE_PUBLISHED');});}
+function visibleProducts(){return draft.filter(p=>matchesProductState(p)&&(p.productId+' '+p.listings.map(l=>l.title).join(' ')).toLowerCase().includes(search.toLowerCase())&&(catalogFilter==='all'||(catalogFilter==='dirty'?dirty(p):selected.has(p.productId))));}
 function syncActions(){for(const id of ['copy','price','activate','deactivate','discard']){const disabled=working||!selected.size||(id==='copy'&&selected.size!==1);$(id).disabled=disabled;$(id).title=!selected.size?'请先勾选商品':id==='copy'&&selected.size!==1?'请选择一个商品作为复制模板':'';}$('clearSelection').hidden=!selected.size;document.querySelector('.batch').classList.toggle('has-selection',selected.size>0);}
 function status(message,error=false){$('status').textContent=message;$('status').className=error?'error':'';}
 async function api(url,body={}){
@@ -96,14 +97,14 @@ function renderHeader(){
 }
 function render(){
   renderHeader();const list=visibleProducts();
-  $('resultCount').textContent='显示 '+list.length+' / '+draft.length+' 个商品';$('resetFilters').hidden=!search&&catalogFilter==='all';
+  $('resultCount').textContent='显示 '+list.length+' / '+draft.length+' 个商品';$('resetFilters').hidden=!search&&catalogFilter==='all'&&productStateFilter==='all';
   document.querySelectorAll('[data-filter]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.filter===catalogFilter));
   $('total').textContent=draft.length;$('selectedCount').textContent=selected.size;
   const count=draft.filter(dirty).length;$('dirtyCount').textContent=count;$('pendingBadge').textContent=count;
   $('selectionHint').textContent=selected.size?'已选择 '+selected.size+' 个商品':'选择商品后执行批量操作';
   $('products').innerHTML=list.map(p=>{
     const o=p.purchaseOptions[0],price=o?.regionalPricingAndAvailabilityConfigs||[],allStates=[...new Set(p.purchaseOptions.map(x=>states[p.productId]?.[x.purchaseOptionId]||x.state||'DRAFT'))],s=allStates.length===1?allStates[0]:'MIXED';
-    return '<tr class="'+(selected.has(p.productId)?'selected':'')+'"><td><input type="checkbox" aria-label="选择 '+esc(p.productId)+'" data-select="'+esc(p.productId)+'" '+(selected.has(p.productId)?'checked':'')+'></td><td><strong>'+esc(p.listings[0]?.title||p.productId)+'</strong><small>'+esc(p.productId)+'</small></td><td><span class="pill">'+p.purchaseOptions.length+' 个选项</span><small>'+esc(o?.purchaseOptionId||'')+' · '+p.listings.length+' 种语言</small></td><td>'+price.slice(0,2).map(r=>'<div class="price-line"><span>'+esc(r.regionCode)+'</span>'+esc(r.price?.currencyCode)+' '+esc(decimal(r.price))+'</div>').join('')+(price.length>2?'<small>共 '+price.length+' 个地区</small>':'')+'</td><td><span class="pill '+(s==='ACTIVE'?'green':'')+'">'+esc(({ACTIVE:'已启用',DRAFT:'草稿',INACTIVE:'已停用',INACTIVE_PUBLISHED:'已停用 · 兼容',MIXED:'多种状态'}[s]||s))+'</span></td><td>'+(dirty(p)?'<span class="pill orange">'+(old(p.productId)?'待更新':'待创建')+'</span>':'<span class="pill">已同步</span>')+'</td><td><button data-edit="'+esc(p.productId)+'">编辑</button></td></tr>';
+    return '<tr class="'+(selected.has(p.productId)?'selected':'')+'"><td><input type="checkbox" aria-label="选择 '+esc(p.productId)+'" data-select="'+esc(p.productId)+'" '+(selected.has(p.productId)?'checked':'')+'></td><td><strong>'+esc(p.listings[0]?.title||p.productId)+'</strong><small>'+esc(p.productId)+'</small></td><td><span class="pill">'+p.purchaseOptions.length+' 个选项</span><small>'+esc(o?.purchaseOptionId||'')+' · '+p.listings.length+' 种语言</small></td><td>'+price.slice(0,2).map(r=>'<div class="price-line"><span>'+esc(r.regionCode)+'</span>'+esc(r.price?.currencyCode)+' '+esc(decimal(r.price))+'</div>').join('')+(price.length>2?'<small>共 '+price.length+' 个地区</small>':'')+'</td><td><span class="pill '+(s==='ACTIVE'?'green':'')+'">'+esc((Object.values(states[p.productId]||{}).length?'待提交 · ':'')+({ACTIVE:'已启用',DRAFT:'草稿',INACTIVE:'已停用',INACTIVE_PUBLISHED:'已停用 · 兼容',MIXED:'多种状态'}[s]||s))+'</span></td><td>'+(dirty(p)?'<span class="pill orange">'+(old(p.productId)?'待更新':'待创建')+'</span>':'<span class="pill">已同步</span>')+'</td><td><button data-edit="'+esc(p.productId)+'">编辑</button></td></tr>';
   }).join('');
   $('empty').hidden=list.length>0;
   $('empty').innerHTML=draft.length?'<div class="empty-symbol">⌕</div><h2>没有匹配的商品</h2><p>试试其他名称、商品 ID，或清除当前筛选。</p>':'<div class="empty-symbol">＋</div><h2>从读取商品开始</h2><p>连接应用后读取商品，或创建第一个商品草稿。</p>';
@@ -250,26 +251,39 @@ function priceDialog(){
 }
 function changeState(target){
   const products=picked();const options=[...new Set(products.flatMap(p=>p.purchaseOptions.map(o=>o.purchaseOptionId)))];
-  modal(target==='ACTIVE'?'批量启用购买选项':'批量停用购买选项','<p class="help">状态变化将加入本地待提交列表。新商品须先创建，再启用。</p><label class="field">购买选项<select id="stateOption"><option value="">全部购买选项</option>'+options.map(x=>'<option>'+esc(x)+'</option>').join('')+'</select></label>',[{label:'取消',run:close},{label:'加入待提交',class:'primary',run:()=>{
+  modal(target==='ACTIVE'?'批量启用购买选项':'批量停用购买选项','<p class="help">状态变化将加入本地待提交列表。新商品可在同一次提交中先创建，再启用。</p><label class="field">购买选项<select id="stateOption"><option value="">全部购买选项</option>'+options.map(x=>'<option>'+esc(x)+'</option>').join('')+'</select></label>',[{label:'取消',run:close},{label:'加入待提交',class:'primary',run:()=>{
     const oid=$('stateOption').value,next=clone(states);
     for(const p of products)for(const o of p.purchaseOptions)if(!oid||o.purchaseOptionId===oid){
       const prior=old(p.productId)?.purchaseOptions.find(x=>x.purchaseOptionId===o.purchaseOptionId);
-      if(!prior)throw Error(p.productId+' 请先创建后再启用');
-      if(target==='INACTIVE'&&!['ACTIVE','INACTIVE'].includes(prior.state))throw Error(p.productId+' 此选项尚未启用');
-      next[p.productId]||={};if(prior.state===target)delete next[p.productId][o.purchaseOptionId];else next[p.productId][o.purchaseOptionId]=target;
+      if(target==='INACTIVE'&&!['ACTIVE','INACTIVE'].includes(prior?.state))throw Error(p.productId+' 此选项尚未启用');
+      next[p.productId]||={};if(prior?.state===target)delete next[p.productId][o.purchaseOptionId];else next[p.productId][o.purchaseOptionId]=target;
     }
     states=next;persist();render();close();status('状态变化已加入待提交');
   }}]);
+}
+
+function encodingField(id){return '<label class="field wide">文件编码<select id="'+id+'"><option value="auto">自动识别（UTF-8 / UTF-16 / 简体中文 GBK）</option><option value="utf-8">UTF-8（推荐多语言文件）</option><option value="gb18030">GBK / GB18030（简体中文 Excel CSV）</option><option value="big5">Big5（繁体中文 CSV）</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label><p class="help wide" id="'+id+'Hint" role="status">导入预览中请核对文字。多语言文件建议在 Excel 中另存为 CSV UTF-8。</p>';}
+async function readImportFile(file,id){
+  const bytes=new Uint8Array(await file.arrayBuffer());let encoding=$(id).value,text;
+  if(encoding==='auto'){
+    if(bytes[0]===255&&bytes[1]===254)encoding='utf-16le';
+    else if(bytes[0]===254&&bytes[1]===255)encoding='utf-16be';
+    else {try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);encoding='utf-8';}catch{encoding='gb18030';}}
+  }
+  try{text??=new TextDecoder(encoding,{fatal:true}).decode(bytes);}catch{throw Error('文件无法按 '+encoding+' 解码，请切换文件编码，或从原始表格另存为 CSV UTF-8');}
+  if(text.includes('\uFFFD')||text.includes('\u0000'))throw Error('文件中存在损坏字符或编码不匹配，请从原始表格重新导出 CSV UTF-8');
+  $(id+'Hint').textContent='本次读取编码：'+encoding+'。请在预览中核对名称和描述；若不正确，请返回切换编码。';
+  return text.replace(/^\uFEFF/,'');
 }
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function languageDialog(editor=null){
   const scope=clone(editor?editor.products:selected.size?picked():draft);
   if(!scope.length)throw Error('请先读取或创建商品，再下载多语言模板');
-  modal('多语言模板导入 · '+scope.length+' 个商品','<p class="help">当前范围：'+(editor?'当前编辑商品 '+esc(scope[0].productId):selected.size?'所选商品':'当前项目的全部商品')+'。每行填写一个商品的一种语言；仅更新名称和描述，未列出的语言、地区和价格均保留。</p><ol class="help"><li>下载模板，已有名称和描述会自动填入。</li><li>用 Excel 等工具编辑，另存为 CSV UTF-8。四列表头保持不变。</li><li>选择文件，检查导入预览后应用到本地草稿。</li></ol><div class="form-grid">'+multiMarkup('templateLanguages','模板中追加的语言（可选，多选）')+'<div class="wide"><button id="downloadLanguages">下载多语言 CSV 模板</button></div><label class="field wide">上传已填写的模板<input id="languageFile" type="file" accept=".csv,text/csv"></label></div><p class="help">列：productId / languageCode / title / description。名称最多 55 字符，描述最多 200 字符；新增语言的空白内容需要填写后再导入。同一商品同一语言重复且内容不同会报错。</p>',[
+  modal('多语言模板导入 · '+scope.length+' 个商品','<p class="help">当前范围：'+(editor?'当前编辑商品 '+esc(scope[0].productId):selected.size?'所选商品':'当前项目的全部商品')+'。每行填写一个商品的一种语言；仅更新名称和描述，未列出的语言、地区和价格均保留。</p><ol class="help"><li>下载模板，已有名称和描述会自动填入。</li><li>用 Excel 等工具编辑，另存为 CSV UTF-8。四列表头保持不变。</li><li>选择文件，检查导入预览后应用到本地草稿。</li></ol><div class="form-grid">'+multiMarkup('templateLanguages','模板中追加的语言（可选，多选）')+'<div class="wide"><button id="downloadLanguages">下载多语言 CSV 模板</button></div><label class="field wide">上传已填写的模板<input id="languageFile" type="file" accept=".csv,text/csv"></label>'+encodingField('languageEncoding')+'</div><p class="help">列：productId / languageCode / title / description。名称最多 55 字符，描述最多 200 字符；新增语言的空白内容需要填写后再导入。同一商品同一语言重复且内容不同会报错。</p>',[
     {label:editor?'返回商品编辑':'取消',run:close},{label:'检查并预览导入',class:'primary',run:async()=>{
       const file=$('languageFile').files[0];if(!file)throw Error('请选择多语言 CSV 模板');
       if(file.size>6*1024*1024)throw Error('文件超过 6MB，请分批导入');
-      const result=await api('listings/import',{mode,csv:await file.text(),existing:scope});
+      const result=await api('listings/import',{mode,csv:await readImportFile(file,'languageEncoding'),existing:scope});
       const rows=[];
       for(const p of result.products)for(const l of p.listings){
         const before=scope.find(x=>x.productId===p.productId)?.listings.find(x=>x.languageCode.toLowerCase()===l.languageCode.toLowerCase());
@@ -289,9 +303,9 @@ function languageDialog(editor=null){
   });
 }
 function importDialog(){
-  modal('导入 CSV / JSON','<p class="help">CSV 按“商品 ID + 购买选项 + 语言 + 地区”合并，只修改文件中列出的名称、描述和地区价格；其他配置保留。建议先导出现有商品作为模板。JSON 适用于完整商品配置。</p><input id="importFile" type="file" accept=".csv,.json"><p class="help">支持 UTF-8 CSV（包含 BOM）。新商品默认创建购买类型的选项。</p><button id="template">下载单地区 CSV 模板</button> <button id="allRegionTemplate">下载全部地区 CSV 模板</button><div class="warning">全部地区：regionCode 填 ALL，price 填税前基准价，currencyCode 填基准币种，availability 填 AVAILABLE。每个商品可填不同基准价。工具将通过 Google 换算全部地区价格，需要真实授权。同一购买选项不要混用 ALL 与单地区行；需要特殊地区价时，可在导入后另行调整。</div><p id="importProgress" class="help" role="status"></p>',[{label:'取消',run:close},{label:'检查并导入草稿',class:'primary',run:async()=>{
+  modal('导入 CSV / JSON','<p class="help">CSV 按“商品 ID + 购买选项 + 语言 + 地区”合并，只修改文件中列出的名称、描述和地区价格；其他配置保留。建议先导出现有商品作为模板。JSON 适用于完整商品配置。</p><input id="importFile" type="file" accept=".csv,.json">'+encodingField('importEncoding')+'<p class="help">支持 UTF-8 CSV（包含 BOM）。新商品默认创建购买类型的选项。</p><button id="template">下载单地区 CSV 模板</button> <button id="allRegionTemplate">下载全部地区 CSV 模板</button><div class="warning">全部地区：regionCode 填 ALL，price 填税前基准价，currencyCode 填基准币种，availability 填 AVAILABLE。每个商品可填不同基准价。工具将通过 Google 换算全部地区价格，需要真实授权。同一购买选项不要混用 ALL 与单地区行；需要特殊地区价时，可在导入后另行调整。</div><p id="importProgress" class="help" role="status"></p>',[{label:'取消',run:close},{label:'检查并导入草稿',class:'primary',run:async()=>{
     const f=$('importFile').files[0];if(!f)throw Error('请选择文件');if(f.size>6*1024*1024)throw Error('文件超过 6MB，请分批');
-    const text=await f.text();let products;
+    const text=await readImportFile(f,'importEncoding');let products;
     if(f.name.toLowerCase().endsWith('.json')){
       const data=JSON.parse(text.replace(/^\uFEFF/,''));products=Array.isArray(data)?data:data.products;
       if(!Array.isArray(products)||!products.length)throw Error('JSON 需要商品数组或 {products:[...]}');
@@ -315,9 +329,17 @@ async function exportDialog(){
 }
 const fieldNames={listings:'语言',title:'名称',description:'描述',languageCode:'语言代码',purchaseOptions:'购买选项',regionalPricingAndAvailabilityConfigs:'地区',price:'价格',currencyCode:'币种',units:'整数金额',nanos:'小数纳单位',availability:'销售状态',buyOption:'购买设置',state:'启用状态',productId:'商品 ID',packageName:'包名',taxAndComplianceSettings:'税务设置',legacyCompatible:'兼容旧版',multiQuantityEnabled:'多件购买',offerTags:'标签'};
 function formatValue(v){if(v===null)return '—';if(typeof v==='object')return JSON.stringify(v);return String(v);}
-async function preview(){
+async function preview(activationChosen=false){
   const products=(selected.size?picked():draft).filter(dirty);
   if(!products.length)throw Error('所选范围内没有待提交变化');
+  const newOptions=products.flatMap(p=>p.purchaseOptions.filter(o=>!old(p.productId)?.purchaseOptions.some(x=>x.purchaseOptionId===o.purchaseOptionId)).map(o=>({productId:p.productId,id:o.purchaseOptionId})));
+  if(newOptions.length&&!activationChosen){
+    modal('新商品提交后的状态','<p>本次包含 <b>'+newOptions.length+' 个新增购买选项</b>，请选择创建后的状态。</p><p class="help">创建并启用：先创建商品，再请求 Google 启用，最后读回核对。仅创建草稿：商品暂不启用。</p>',[
+      {label:'返回编辑',run:close},
+      {label:'仅创建草稿',run:()=>{for(const o of newOptions)if(states[o.productId])delete states[o.productId][o.id];persist();render();return preview(true);}},
+      {label:'创建并启用',class:'primary',run:()=>{for(const o of newOptions){states[o.productId]||={};states[o.productId][o.id]='ACTIVE';}persist();render();return preview(true);}}
+    ]);return;
+  }
   activePlan=null;
   modal('正在生成预览','<div class="preview-loading" role="status"><span class="spinner"></span><div><strong>正在校验 '+products.length+' 个商品</strong><p>正在检查 Google 当前配置，请稍候。此步骤不会提交商品修改。</p></div></div>');
   let plan;
@@ -330,7 +352,7 @@ async function preview(){
   }
   activePlan=plan;
   modal('提交前预览 · '+plan.entries.length+' 个商品',
-    '<div class="warning">'+(mode==='demo'?'演示操作，仅写入本机示例数据。':'即将修改真实 Google Play 商品。')+'<br>目标：'+esc(mode==='demo'?'演示工作区':settings.current.name)+' · <b>'+esc(plan.packageName)+'</b><br>预览有效期 15 分钟。新商品保存为草稿；已有启用商品的改价会影响后续购买。</div>'+plan.entries.map(e=>'<section class="preview-item"><h3>'+esc(e.after.productId)+' <span class="pill '+(e.before?'':'orange')+'">'+(e.before?'更新':'创建')+'</span></h3><table class="diff-table"><thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead><tbody>'+e.changes.map(c=>'<tr><td>'+esc(c.path.split('.').map(x=>fieldNames[x]||x).join(' / '))+'</td><td>'+esc(formatValue(c.before))+'</td><td>'+esc(formatValue(c.after))+'</td></tr>').join('')+'</tbody></table></section>').join('')+'<label class="checkline"><input type="checkbox" id="confirmWrite">我已核对目标项目和上述变更</label>',[
+    '<div class="warning">'+(mode==='demo'?'演示操作，仅写入本机示例数据。':'即将修改真实 Google Play 商品。')+'<br>目标：'+esc(mode==='demo'?'演示工作区':settings.current.name)+' · <b>'+esc(plan.packageName)+'</b><br>预览有效期 15 分钟。新购买选项按下方状态变更创建或启用；已有启用商品的改价会影响后续购买。</div>'+plan.entries.map(e=>'<section class="preview-item"><h3>'+esc(e.after.productId)+' <span class="pill '+(e.before?'':'orange')+'">'+(e.before?'更新':'创建')+'</span></h3><table class="diff-table"><thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead><tbody>'+e.changes.map(c=>'<tr><td>'+esc(c.path.split('.').map(x=>fieldNames[x]||x).join(' / '))+'</td><td>'+esc(formatValue(c.before))+'</td><td>'+esc(formatValue(c.after))+'</td></tr>').join('')+'</tbody></table></section>').join('')+'<label class="checkline"><input type="checkbox" id="confirmWrite">我已核对目标项目和上述变更</label>',[
     {label:'返回编辑',run:close},{label:mode==='demo'?'提交演示变更':'提交到 Google Play',class:'primary',run:async()=>{
       if(!$('confirmWrite').checked)throw Error('请先核对并勾选变更确认');
       const result=await job(()=>api('commit',{id:plan.id,mode:plan.mode,packageName:plan.packageName}),'正在提交并逐项读回核对，请勿关闭工具…');
@@ -357,7 +379,8 @@ async function init(){
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});
-  bind('resetFilters',()=>{catalogFilter='all';search='';$('search').value='';render();});
+  $('productStateFilter').onchange=e=>{productStateFilter=e.target.value;render();};
+  bind('resetFilters',()=>{productStateFilter='all';$('productStateFilter').value='all';catalogFilter='all';search='';$('search').value='';render();});
   bind('clearSelection',()=>{selected.clear();render();});
   $('search').oninput=e=>{search=e.target.value;render();};
   $('selectAll').onchange=e=>{visibleProducts().forEach(p=>e.target.checked?selected.add(p.productId):selected.delete(p.productId));render();};

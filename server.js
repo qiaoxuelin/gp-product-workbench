@@ -76,8 +76,8 @@ function checkTransitions(before,after,states) {
   for(const [id,target] of Object.entries(states||{})) {
     if(!['ACTIVE','INACTIVE'].includes(target))throw Error('状态目标无效');
     const old=before?.purchaseOptions.find(o=>o.purchaseOptionId===id);
-    if(!old||!after.purchaseOptions.some(o=>o.purchaseOptionId===id))throw Error('请先提交创建，再启用新购买选项');
-    if(target==='INACTIVE'&&!['ACTIVE','INACTIVE'].includes(old.state))throw Error('只有已启用的购买选项可以停用');
+    if(!after.purchaseOptions.some(o=>o.purchaseOptionId===id))throw Error('目标购买选项不存在');
+    if(target==='INACTIVE'&&!['ACTIVE','INACTIVE'].includes(old?.state))throw Error('只有已启用的购买选项可以停用');
   }
 }
 async function preview(body) {
@@ -158,7 +158,7 @@ async function commit(body) {
       const actual=await getProduct(plan.mode,id);
       const fieldsOK=e.updateMask.every(k=>projectContains(C.writable(actual||{})[k],C.writable(e.after)[k]));
       const statesOK=Object.entries(e.states).every(([oid,t])=>actual?.purchaseOptions.find(o=>o.purchaseOptionId===oid)?.state===t);
-      record.results.push({productId:id,status:fieldsOK&&statesOK?'verified':'pending',message:fieldsOK&&statesOK?'已提交并读回核对':'已提交，读回尚未完全一致，请刷新核对后再决定是否重试',actual});
+      record.results.push({productId:id,status:fieldsOK&&statesOK?'verified':'pending',message:fieldsOK&&statesOK?'已提交并读回核对；购买选项：'+actual.purchaseOptions.map(o=>o.purchaseOptionId+' '+({ACTIVE:'已启用',DRAFT:'草稿（未启用）',INACTIVE:'已停用'}[o.state]||o.state)).join('、'):'已提交，读回尚未完全一致，请刷新核对后再决定是否重试',actual});
     }catch(err){
       const rejected=!confirmedWrite&&[400,401,403,404].includes(err.status);
       const uncertain=wrote&&!rejected;

@@ -97,5 +97,28 @@ test('HTTP integration: demo lifecycle, CSRF, multi-project isolation, live adap
   failWrite='billing';result=await call('commit',{mode:'live',profileId:a.activeId,packageName:'com.test.a',id:plan.id});
   assert.equal(result.results[0].status,'failed');
   assert.match(result.results[0].message,/com.android.vending.BILLING/);
+
+  { const previousMock=global.fetch;let created=null;const order=[];
+  const freshProduct=C.clone(next);freshProduct.productId='create_and_activate';delete freshProduct.purchaseOptions[0].state;
+  global.fetch=async(url,options={})=>{
+    if(String(url).endsWith('/oneTimeProducts:batchUpdate')){
+      const body=JSON.parse(options.body);assert.equal(body.requests[0].allowMissing,true);
+      created={...body.requests[0].oneTimeProduct,regionsVersion:body.requests[0].regionsVersion};
+      created.purchaseOptions[0].state='DRAFT';order.push('create');return Response.json({oneTimeProducts:[created]});
+    }
+    if(String(url).endsWith('/create_and_activate/purchaseOptions:batchUpdateStates')){
+      assert(created);assert.equal(created.purchaseOptions[0].state,'DRAFT');
+      assert.deepEqual(JSON.parse(options.body).requests[0].activatePurchaseOptionRequest,{packageName:'com.test.a',productId:'create_and_activate',purchaseOptionId:created.purchaseOptions[0].purchaseOptionId});
+      created.purchaseOptions[0].state='ACTIVE';order.push('activate');return Response.json({oneTimeProducts:[created]});
+    }
+    if(String(url).endsWith('/oneTimeProducts/create_and_activate'))return created?Response.json(created):Response.json({error:{message:'not found'}},{status:404});
+    return previousMock(url,options);
+  };
+  plan=await call('preview',{mode:'live',profileId:a.activeId,items:[{before:null,after:freshProduct,states:{[freshProduct.purchaseOptions[0].purchaseOptionId]:'ACTIVE'}}]});
+  result=await call('commit',{mode:'live',profileId:a.activeId,packageName:'com.test.a',id:plan.id});
+  assert.deepEqual(order,['create','activate']);assert.equal(result.results[0].status,'verified');
+  assert.equal(result.results[0].actual.purchaseOptions[0].state,'ACTIVE');
+
+  }
   const history=await call('history');assert(history.operations.length>=5);
 });

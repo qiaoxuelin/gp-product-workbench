@@ -287,3 +287,63 @@ test('single product template preserves unsaved edits and returns to editor befo
   await page.locator('[data-edit="coins_550"]').click();
   await expect(page.locator('[data-k="languageCode"]')).toHaveCount(2);
 });
+
+test('legacy Excel CSV decodes GBK and UTF16 without losing Chinese text',async({page})=>{
+  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.locator('[data-select="coins_100"]').check();await page.locator('#languages').click();
+  const gbk=Buffer.concat([Buffer.from('productId,languageCode,title,description\ncoins_100,zh-CN,'),Buffer.from([0xd6,0xd0,0xce,0xc4]),Buffer.from(','),Buffer.from([0xc3,0xe8,0xca,0xf6])]);
+  await page.locator('#languageFile').setInputFiles({name:'gbk.csv',mimeType:'text/csv',buffer:gbk});
+  await page.getByRole('button',{name:'检查并预览导入'}).click();
+  await expect(page.locator('#dialogBody')).toContainText('中文');
+  await expect(page.locator('#dialogBody')).toContainText('描述');
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.locator('#languages').click();
+  const utf16=Buffer.concat([Buffer.from([255,254]),Buffer.from('productId,languageCode,title,description\ncoins_100,ja-JP,日本語,説明','utf16le')]);
+  await page.locator('#languageFile').setInputFiles({name:'utf16.csv',mimeType:'text/csv',buffer:utf16});
+  await page.getByRole('button',{name:'检查并预览导入'}).click();
+  await expect(page.locator('#dialogBody')).toContainText('日本語');
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.locator('#languages').click();
+  await page.locator('#languageFile').setInputFiles({name:'damaged.csv',mimeType:'text/csv',buffer:Buffer.from('productId,languageCode,title,description\ncoins_100,zh-CN,\uFFFD,损坏')});
+  await page.getByRole('button',{name:'检查并预览导入'}).click();
+  await expect(page.locator('[role=alert]')).toContainText('损坏字符');
+});
+test('new product can be created and activated in one confirmed submission',async({page})=>{
+  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.locator('[data-select="coins_100"]').check();await page.locator('#copy').click();
+  await page.locator('#copyIds').fill('new_active');
+  await page.getByRole('button',{name:'生成商品草稿'}).click();
+  await page.locator('#preview').click();
+  await expect(page.locator('#dialogTitle')).toHaveText('新商品提交后的状态');
+  await page.getByRole('button',{name:'创建并启用',exact:true}).click();
+  await expect(page.locator('#dialogTitle')).toContainText('提交前预览');
+  await expect(page.locator('#dialogBody')).toContainText('ACTIVE');
+  await page.locator('#confirmWrite').check();
+  await page.getByRole('button',{name:'提交演示变更'}).click();
+  await expect(page.locator('#dialogBody')).toContainText('buy 已启用');
+  await page.getByRole('button',{name:'关闭',exact:true}).last().click();
+  await expect(page.locator('tr').filter({has:page.locator('[data-select="new_active"]')})).toContainText('已启用');
+});
+
+test('status filters combine with search and distinguish draft active and inactive products',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.evaluate(()=>{
+    draft=['coins_100','coins_550','remove_ads'].map(id=>draft.find(p=>p.productId===id));
+    draft[0].purchaseOptions[0].state='DRAFT';
+    draft[1].purchaseOptions[0].state='INACTIVE';
+    draft[2].purchaseOptions[0].state='ACTIVE';
+    render();
+  });
+  await page.locator('#productStateFilter').selectOption('DRAFT');
+  await expect(page.locator('#products tr')).toHaveCount(1);
+  await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('#productStateFilter').selectOption('INACTIVE');
+  await expect(page.locator('#products')).toContainText('coins_550');
+  await page.locator('#productStateFilter').selectOption('ACTIVE');
+  await expect(page.locator('#products tr')).toHaveCount(1);
+  await expect(page.locator('#products')).toContainText('remove_ads');
+  await page.locator('#search').fill('coins');
+  await expect(page.locator('#empty')).toBeVisible();
+  await page.locator('#resetFilters').click();
+  await expect(page.locator('#products tr')).toHaveCount(3);
+});
