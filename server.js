@@ -10,6 +10,7 @@ const ROOT=__dirname,DATA=process.env.GP_DATA_DIR||path.join(ROOT,'data');
 fs.mkdirSync(DATA,{recursive:true});
 const SCHEMAS=JSON.parse(fs.readFileSync(path.join(ROOT,'google-api-discovery.json'),'utf8')).schemas;
 const PORT=Number(process.env.GP_PORT||4318),SESSION=crypto.randomBytes(32).toString('hex');
+const updater=require('./updater').createUpdater({root:ROOT,data:DATA,version:APP_VERSION,port:PORT});
 const read=(name,fallback)=>{try{return JSON.parse(fs.readFileSync(path.join(DATA,name),'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const save=(name,obj)=>{const dest=path.join(DATA,name);fs.writeFileSync(dest+'.tmp',JSON.stringify(obj,null,2),{mode:0o600});fs.renameSync(dest+'.tmp',dest);};
 let settings=read('config.json',{profiles:[],activeId:''});
@@ -203,6 +204,9 @@ async function recoverOperation(b){
   return {entries,resolved,blocked};
 }
 async function route(url,b) {
+  if(url==='/api/update/check')return updater.check();
+  if(url==='/api/update/status')return updater.status();
+  if(url==='/api/update/start')return updater.begin(b.version);
   if(b.mode==='live'&&!url.startsWith('/api/config')&&b.profileId!==config.id)throw Error('当前项目已切换，请重新选择项目并读取商品');
   if(url.startsWith('/api/finance/')){
     if(b.mode!=='live')throw Error('账单导出需要真实项目及 Google 财务权限，演示模式不提供真实账单');
@@ -298,11 +302,13 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method!=='POST'||req.headers['x-gp-token']!==SESSION)return send(res,403,{error:'请从本机工具页面操作'});
   if(!(req.headers['content-type']||'').startsWith('application/json'))return send(res,415,{error:'需要 JSON'});
+  if(updater.isActive()&&url!=='/api/update/status')return send(res,409,{error:'正在更新，请等待重启完成'});
   if(busy)return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
   let text='';try{
     for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>8*1024*1024)throw Error('请求超过 8MB，请分批处理');}
     const body=JSON.parse(text||'{}');
     // Recheck after asynchronous request parsing to serialize mutations.
+    if(updater.isActive()&&url!=='/api/update/status')return send(res,409,{error:'正在更新，请等待重启完成'});
     if(busy)return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
     busy=true;
     try{

@@ -430,3 +430,20 @@ test('monthly finance UI saves account report address, downloads original bytes 
   await page.locator('#finance').click();
   await expect(page.locator('#financeBucket')).toHaveValue('pubsite_prod_rev_finance');
 });
+
+test('update dialog distinguishes source mode and preserves draft when installer fails',async({page})=>{
+  await page.route('**/api/update/check',route=>route.fulfill({json:{currentVersion:'0.1.7',version:'0.2.0',available:true,supported:false,page:'https://github.com/qiaoxuelin/gp-product-workbench/releases/tag/v0.2.0',notes:'<script>alert(1)</script>'}}));
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('#update').click();await expect(page.locator('#dialogBody')).toContainText('源码运行');
+  await expect(page.getByRole('button',{name:'更新并重启',exact:true})).toHaveCount(0);
+  await page.locator('#closeModal').click();
+  await page.route('**/api/update/check',route=>route.fulfill({json:{currentVersion:'0.1.7',version:'0.2.0',available:true,supported:true,page:'https://github.com/qiaoxuelin/gp-product-workbench/releases/tag/v0.2.0',notes:'test release'}}));
+  let requested;
+  await page.route('**/api/update/start',route=>{requested=route.request().postDataJSON();return route.fulfill({json:{started:true}});});
+  await page.route('**/api/update/status',route=>route.fulfill({json:{phase:'failed',message:'SHA256 校验失败'}}));
+  await page.locator('#update').click();await page.getByRole('button',{name:'更新并重启',exact:true}).click();
+  await expect(page.locator('#dialogTitle')).toHaveText('更新未完成');
+  expect(requested.version).toBe('0.2.0');await expect(page.locator('#dialogBody')).toContainText('SHA256 校验失败');
+  expect(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.startsWith('gp-workspace-v1:')))).toBeTruthy();
+  await page.locator('#closeModal').click();await expect(page.locator('#refresh')).toBeEnabled();
+});

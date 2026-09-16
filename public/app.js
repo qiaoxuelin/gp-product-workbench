@@ -463,10 +463,48 @@ function financeDialog(){
   });
 }
 
+
+async function updateDialog(){
+  modal('检查更新','<p>正在读取 GitHub 最新正式版本…</p>',[{label:'关闭',run:close}]);
+  const release=await job(()=>api('update/check'),'正在检查更新…');
+  modal('检查更新','<p>当前版本：<b>'+esc(release.currentVersion)+'</b>　最新版本：<b>'+esc(release.version)+'</b></p>'+
+    '<p>'+(release.available?'发现新版本。':'当前已是最新版本，或正在使用更高版本。')+'</p>'+
+    (release.supported?'<p>更新会下载并校验安装包，短暂停止服务后重启。项目、授权和已保存的浏览器草稿保留；原启动入口仍可使用。</p>':'<p class="warning">当前为源码运行，自动安装仅支持 Windows 免安装版。请通过 Git 更新源码，或前往下载页获取免安装包。</p>')+
+    '<p><a href="'+esc(release.page)+'" target="_blank" rel="noreferrer">打开 GitHub 下载页 ↗</a></p><details><summary>查看发布说明</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(release.notes)+'</pre></details>',
+    [{label:'关闭',run:close},...(release.available&&release.supported?[{label:'更新并重启',primary:true,run:()=>installUpdate(release.version)}]:[])]);
+}
+async function installUpdate(version){
+  // Abort if draft persistence fails; do not silently restart with unsaved browser data.
+  localStorage.setItem(key(),JSON.stringify({base,draft,states}));
+  await job(()=>api('update/start',{version}),'正在启动更新…');
+  modal('正在更新','<p id="updateProgress" role="status">正在准备下载，请保持页面打开…</p>',[]);
+  working=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);$('mode').disabled=true;$('project').disabled=true;
+  const started=Date.now();
+  const poll=async()=>{
+    try{
+      const state=await api('update/status');
+      if(state.phase==='complete'&&!state.locked&&state.currentVersion===version){
+        location.reload();return;
+      }
+      if(state.phase==='failed'){
+        working=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);$('mode').disabled=false;$('project').disabled=false;syncActions();
+        modal('更新未完成','<p class="error-box">'+esc(state.message)+'</p><p>旧版程序与本机数据已保留。可重试；若服务未启动，请双击原来的“启动工具.cmd”。</p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">前往 GitHub 手动下载</a>',[{label:'关闭',run:close},{label:'重新检查',run:updateDialog}]);return;
+      }
+      $('updateProgress').textContent=state.phase==='downloading'?'正在下载：'+Math.floor((state.received||0)/state.total*100)+'%':'正在校验、安装并重启，请稍候…';
+    }catch{$('updateProgress').textContent='正在等待工具重启…';}
+    if(Date.now()-started>10*60*1000){
+      working=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);$('mode').disabled=false;$('project').disabled=false;syncActions();
+      modal('更新状态待确认','<p>等待重启超时。请双击原来的“启动工具.cmd”并刷新页面，或前往 GitHub 手动下载。已有项目数据仍保留。</p>',[{label:'关闭',run:close}]);return;
+    }
+    setTimeout(poll,1200);
+  };
+  setTimeout(poll,500);
+}
+
 async function init(){
   const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
   bind('about',()=>modal('关于 PlayBatch','<h3>Google Play 商品工作台</h3><p>由 <a href="https://github.com/qiaoxuelin" target="_blank" rel="noreferrer">qiaoxuelin</a> 开发</p><p>当前版本：'+esc(session.version||'未知')+'</p><p>一次性商品批量创建、地区改价、多语言与状态管理。</p><p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">查看新版与更新说明 ↗</a></p>',[{label:'关闭',run:close}]));settings=await api('config');await restoreVisit();restore();
-  bind('finance',financeDialog);
+  bind('update',updateDialog);bind('finance',financeDialog);
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});
