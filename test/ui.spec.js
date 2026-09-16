@@ -467,3 +467,14 @@ test('Excel multilingual sheets preview Unicode and errors by sheet before apply
   await page.getByRole('button',{name:'检查并预览导入'}).click();
   await expect(page.locator('#modalError')).toContainText('页签 ja-JP 第 2 行');
 });
+
+test('old backend update endpoint gives restart instructions instead of indefinite loading',async({page})=>{
+  await page.route('**/api/update/check',route=>route.fulfill({status:400,json:{error:'未知接口'}}));
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('#update').click();
+  await expect(page.locator('#dialogTitle')).toHaveText('检查更新未完成');
+  await expect(page.locator('#dialogBody')).toContainText('停止工具.cmd');
+  await expect(page.locator('#dialogBody')).toContainText('启动工具.cmd');
+  await expect(page.locator('#dialogBody')).not.toContainText('正在读取');
+  await expect(page.getByRole('button',{name:'重试',exact:true})).toBeEnabled();
+});

@@ -481,7 +481,12 @@ function financeDialog(){
 
 async function updateDialog(){
   modal('检查更新','<p>正在读取 GitHub 最新正式版本…</p>',[{label:'关闭',run:close}]);
-  const release=await job(()=>api('update/check'),'正在检查更新…');
+  let release;
+  try{release=await job(()=>api('update/check'),'正在检查更新…');}
+  catch(e){
+    const message=e.message==='未知接口'?'当前后台服务仍为旧版。请先双击“停止工具.cmd”，再双击“启动工具.cmd”，刷新页面后重试。':e.message;
+    modal('检查更新未完成','<p class="error-box">'+esc(message)+'</p><p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">打开 GitHub 下载页 ↗</a></p>',[{label:'关闭',run:close},{label:'重试',run:updateDialog}]);return;
+  }
   modal('检查更新','<p>当前版本：<b>'+esc(release.currentVersion)+'</b>　最新版本：<b>'+esc(release.version)+'</b></p>'+
     '<p>'+(release.available?'发现新版本。':'当前已是最新版本，或正在使用更高版本。')+'</p>'+
     (release.supported?'<p>更新会下载并校验安装包，短暂停止服务后重启。项目、授权和已保存的浏览器草稿保留；原启动入口仍可使用。</p>':'<p class="warning">当前为源码运行，自动安装仅支持 Windows 免安装版。请通过 Git 更新源码，或前往下载页获取免安装包。</p>')+
