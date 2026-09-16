@@ -78,3 +78,8 @@ test('ALL CSV expands each price tier, caches translations and rejects ambiguous
   await assert.rejects(()=>C.expandAllRegionsCSV(input+'\ncoins_100,buy,en-US,Coins,Get coins,US,USD,1.99,AVAILABLE',[],convert),/不能混用/);
   await assert.rejects(()=>C.expandAllRegionsCSV(input.replace('ALL,USD,4.99,AVAILABLE','ALL,USD,4.99,NO_LONGER_AVAILABLE'),[],convert),/availability/);
 });
+
+test('CSV format errors report physical source lines including multiline records',()=>{
+  assert.throws(()=>C.parseCSV('a,b\n"two\nlines",ok\nbroken'),/第 4 行列数不符/);
+  assert.throws(()=>C.parseCSV('a,b\r\n\r\n"unclosed'),/第 3 行引号未闭合/);
+});

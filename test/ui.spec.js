@@ -347,3 +347,45 @@ test('status filters combine with search and distinguish draft active and inacti
   await page.locator('#resetFilters').click();
   await expect(page.locator('#products tr')).toHaveCount(3);
 });
+
+test('file preview refreshes encoding and reports malformed CSV before import',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('#languages').click();
+  const bytes=Buffer.concat([Buffer.from('productId,languageCode,title,description\ncoins_100,zh-CN,'),Buffer.from([0xd6,0xd0,0xce,0xc4]),Buffer.from(',text')]);
+  await page.locator('#languageFile').setInputFiles({name:'preview.csv',mimeType:'text/csv',buffer:bytes});
+  await expect(page.locator('#languageEncodingPreview')).toContainText('中文');
+  await expect(page.locator('#languageEncodingPreview')).toContainText('CSV 格式有效');
+  await page.locator('#languageEncoding').selectOption('utf-8');
+  await expect(page.locator('#languageEncodingPreview')).toContainText('无法按 utf-8 解码');
+  await page.locator('#languageEncoding').selectOption('gb18030');
+  await expect(page.locator('#languageEncodingPreview')).toContainText('中文');
+  await page.locator('#languageFile').setInputFiles({name:'bad.csv',mimeType:'text/csv',buffer:Buffer.from('productId,languageCode,title,description\ncoins_100,en-US,missing-description')});
+  await expect(page.locator('#languageEncodingPreview')).toContainText('第 2 行列数不符');
+  await page.screenshot({path:'data/ui-import-preview.png',fullPage:true});
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.locator('#about').click();
+  await expect(page.locator('#dialogTitle')).toHaveText('关于 PlayBatch');
+  await expect(page.locator('#dialogBody')).toContainText('当前版本');
+});
+
+test('unfinished result requires remote review and a new confirmation before retry',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  const before=await page.evaluate(()=>structuredClone(base.find(p=>p.productId==='coins_100')));
+  await page.locator('[data-select="coins_100"]').check();await page.locator('#price').click();
+  await page.locator('#priceValue').fill('2.99');await page.getByRole('button',{name:'计算并应用到草稿'}).click();
+  await expect(page.locator('#dirtyCount')).toHaveText('1');
+  const after=await page.evaluate(()=>structuredClone(draft.find(p=>p.productId==='coins_100')));
+  let writes=0,reads=0;
+  await page.route('**/api/commit',route=>{writes++;return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({logFile:'operation-test.json',results:[{productId:'coins_100',status:'uncertain',message:'连接中断，请核对',steps:{check:'success',configuration:'uncertain',state:'skipped',readback:'pending'}}]})});});
+  await page.route('**/api/recover',route=>{reads++;return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({entries:[{before,after,states:{},reason:'远端仍与原始版本一致'}],resolved:[],blocked:[]})});});
+  await page.locator('#preview').click();await page.locator('#confirmWrite').check();
+  await page.getByRole('button',{name:'提交演示变更'}).click();
+  await expect(page.locator('.result-steps')).toContainText('创建 / 更新 · 待核对');
+  await page.getByRole('button',{name:'核对未完成项',exact:true}).click();
+  await expect(page.locator('#dialogTitle')).toHaveText('未完成项核对结果');
+  expect(writes).toBe(1);expect(reads).toBe(1);
+  await page.getByRole('button',{name:'应用核对结果并预览'}).click();
+
+  await expect(page.locator('#dialogTitle')).toContainText('提交前预览');
+  await expect(page.locator('#confirmWrite')).not.toBeChecked();expect(writes).toBe(1);
+});

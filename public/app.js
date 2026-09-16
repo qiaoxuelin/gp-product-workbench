@@ -262,7 +262,7 @@ function changeState(target){
   }}]);
 }
 
-function encodingField(id){return '<label class="field wide">文件编码<select id="'+id+'"><option value="auto">自动识别（UTF-8 / UTF-16 / 简体中文 GBK）</option><option value="utf-8">UTF-8（推荐多语言文件）</option><option value="gb18030">GBK / GB18030（简体中文 Excel CSV）</option><option value="big5">Big5（繁体中文 CSV）</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label><p class="help wide" id="'+id+'Hint" role="status">导入预览中请核对文字。多语言文件建议在 Excel 中另存为 CSV UTF-8。</p>';}
+function encodingField(id){return '<label class="field wide">文件编码<select id="'+id+'"><option value="auto">自动识别（UTF-8 / UTF-16 / 简体中文 GBK）</option><option value="utf-8">UTF-8（推荐多语言文件）</option><option value="gb18030">GBK / GB18030（简体中文 Excel CSV）</option><option value="big5">Big5（繁体中文 CSV）</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label><p class="help wide" id="'+id+'Hint" role="status">导入预览中请核对文字。多语言文件建议在 Excel 中另存为 CSV UTF-8。</p><div class="file-inspect wide" id="'+id+'Preview" hidden></div>';}
 async function readImportFile(file,id){
   const bytes=new Uint8Array(await file.arrayBuffer());let encoding=$(id).value,text;
   if(encoding==='auto'){
@@ -274,6 +274,45 @@ async function readImportFile(file,id){
   if(text.includes('\uFFFD')||text.includes('\u0000'))throw Error('文件中存在损坏字符或编码不匹配，请从原始表格重新导出 CSV UTF-8');
   $(id+'Hint').textContent='本次读取编码：'+encoding+'。请在预览中核对名称和描述；若不正确，请返回切换编码。';
   return text.replace(/^\uFEFF/,'');
+}
+
+function bindImportPreview(fileId,encodingId){
+  const input=$(fileId),encoding=$(encodingId),box=$(encodingId+'Preview');let revision=0;
+  const refresh=async()=>{
+    const rev=++revision,file=input.files[0];box.hidden=!file;if(!file)return;
+    box.textContent='正在读取文件预览…';
+    try{
+      if(file.size>6*1024*1024)throw Error('文件超过 6MB，请分批导入');
+      const text=await readImportFile(file,encodingId);
+      if(rev!==revision||$(fileId)!==input)return;
+      const lines=text.split(/\r\n|\n|\r/);
+      box.innerHTML='<h4>文件内容预览 <small>前 '+Math.min(lines.length,8)+' 行</small></h4><div class="raw-preview">'+lines.slice(0,8).map((line,i)=>'<div><span>'+(i+1)+'</span><code>'+esc(line)+'</code></div>').join('')+'</div><p class="inspect-validation">正在检查格式…</p>';
+      if(file.name.toLowerCase().endsWith('.json')){JSON.parse(text);box.querySelector('.inspect-validation').textContent='JSON 格式有效；导入时进一步校验商品字段。';}
+      else {
+        const result=await api('import/inspect',{csv:text});
+        if(rev!==revision||$(fileId)!==input)return;
+        box.querySelector('.inspect-validation').textContent='CSV 格式有效，共 '+result.count+' 条记录。请确认文字显示正确。';
+      }
+    }catch(e){if(rev!==revision||$(fileId)!==input)return;const message='<p class="error-box" role="status">'+esc(e.message)+'</p>';if(box.querySelector('.raw-preview'))box.querySelector('.inspect-validation').outerHTML=message;else box.innerHTML=message;}
+  };
+  input.onchange=refresh;encoding.onchange=refresh;
+}
+function resultSteps(r){
+  const names={check:'提交前核对',configuration:'创建 / 更新',state:'启用 / 停用',readback:'读回核对'},labels={pending:'待完成',skipped:'无需执行',success:'成功',failed:'失败',uncertain:'待核对'};
+  return r.steps?'<div class="result-steps">'+Object.entries(r.steps).map(([k,v])=>'<span class="pill '+(v==='success'?'green':v==='failed'||v==='uncertain'?'orange':'')+'">'+esc(names[k]+' · '+labels[v])+'</span>').join('')+'</div>':'';
+}
+async function recoverResult(logFile){
+  const result=await job(()=>api('recover',{mode,logFile}),'正在重新读取远端，仅核对未完成项…');
+  modal('未完成项核对结果','<p class="help">本次仅查询远端。应用后将更新这些商品的本地草稿，保留仍需执行的步骤，再生成新的提交预览。</p>'+
+    result.entries.map(e=>'<div class="result-row"><b>'+esc(e.after.productId)+'</b><p>'+esc(e.reason)+'</p></div>').join('')+
+    result.resolved.map(r=>'<div class="result-row"><b>'+esc(r.productId)+'</b><p>远端已完成，无需重试</p></div>').join('')+
+    result.blocked.map(r=>'<div class="error-box"><b>'+esc(r.productId)+'</b><p>'+esc(r.message)+'</p></div>').join(''),
+    [{label:'返回',run:close},...(result.entries.length||result.resolved.length?[{label:'应用核对结果并预览',class:'primary',run:async()=>{
+      selected.clear();
+      for(const r of result.resolved){base=base.filter(p=>p.productId!==r.productId).concat([clone(r.actual)]);draft=draft.filter(p=>p.productId!==r.productId).concat([clone(r.actual)]);delete states[r.productId];}
+      for(const e of result.entries){const id=e.after.productId;base=base.filter(p=>p.productId!==id);if(e.before)base.push(clone(e.before));draft=draft.filter(p=>p.productId!==id).concat([clone(e.after)]);states[id]=clone(e.states);selected.add(id);}
+      persist();render();if(result.entries.length)await preview(true);else{close();status('远端已完成，已同步本地状态');}
+    }}]:[])]);
 }
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function languageDialog(editor=null){
@@ -295,6 +334,7 @@ function languageDialog(editor=null){
     }}
   ]);
   if(editor)$('modal').returnToEditor=editor.back;
+  bindImportPreview('languageFile','languageEncoding');
   initMulti('templateLanguages',LANGUAGE_CODES.concat(scope.flatMap(p=>p.listings.map(l=>l.languageCode))),[],'language');
   bind('downloadLanguages',async()=>{
     const languages=$('templateLanguages').selectedValues();
@@ -320,6 +360,7 @@ function importDialog(){
     }
     replace(products);close();status('已导入 '+products.length+' 个商品草稿，请预览差异后提交');
   }}]);
+  bindImportPreview('importFile','importEncoding');
   bind('template',()=>download('products-template.csv','\uFEFFproductId,purchaseOptionId,languageCode,title,description,regionCode,currencyCode,price,availability\r\ncoins_100,buy,en-US,100 Coins,Get 100 coins,US,USD,0.99,AVAILABLE\r\n','text/csv;charset=utf-8'));
   bind('allRegionTemplate',()=>download('products-all-regions-template.csv','\uFEFFproductId,purchaseOptionId,languageCode,title,description,regionCode,currencyCode,price,availability\r\ncoins_100,buy,en-US,100 Coins,Get 100 coins,ALL,USD,0.99,AVAILABLE\r\n','text/csv;charset=utf-8'));
 }
@@ -362,7 +403,7 @@ async function preview(activationChosen=false){
         draft=draft.filter(p=>p.productId!==r.productId);draft.push(clone(r.actual));delete states[r.productId];selected.delete(r.productId);
       }
       persist();render();
-      modal('提交结果',result.results.map(r=>'<div class="result-row"><b>'+esc(r.productId)+' <span class="pill '+(r.status==='verified'?'green':'orange')+'">'+esc({verified:'已核对',pending:'等待核对',uncertain:'状态不确定',failed:'未写入'}[r.status])+'</span></b><p>'+esc(r.message)+'</p></div>').join('')+'<p class="help">本机记录：data/'+esc(result.logFile)+'。失败或待核对商品的草稿已保留。结果不确定时，请先在后台核对，避免直接重复提交。</p>',[{label:'关闭',class:'primary',run:close}]);
+      modal('提交结果',result.results.map(r=>'<div class="result-row"><b>'+esc(r.productId)+' <span class="pill '+(r.status==='verified'?'green':'orange')+'">'+esc({verified:'已核对',pending:'等待核对',uncertain:'状态不确定',failed:'未写入'}[r.status])+'</span></b><p>'+esc(r.message)+'</p>'+resultSteps(r)+'</div>').join('')+'<p class="help">本机操作记录：'+esc(result.logFile)+'。失败或待核对商品的草稿已保留。结果不确定时，请先在后台核对，避免直接重复提交。</p>',[...(result.results.some(r=>r.status!=='verified')?[{label:'核对未完成项',run:()=>recoverResult(result.logFile)}]:[]),{label:'关闭',class:'primary',run:close}]);
       status('处理完成：'+result.results.filter(r=>r.status==='verified').length+'/'+result.results.length+' 个商品已读回核对');
     }}]);
 }
@@ -372,10 +413,15 @@ function discard(){
   }}]);
 }
 async function history(){
-  const data=await api('history');modal('最近操作记录',data.operations.length?data.operations.map(o=>'<section class="preview-item"><h3>'+esc(new Date(o.startedAt).toLocaleString())+' · '+esc(o.mode==='demo'?'演示':'真实')+' · '+esc(o.packageName)+'</h3>'+o.results.map(r=>'<div class="result-row"><b>'+esc(r.productId)+' · '+esc(r.status)+'</b><p>'+esc(r.message)+'</p></div>').join('')+'<p class="help">'+esc(o.file)+'</p></section>').join(''):'<p class="help">还没有提交记录。</p>',[{label:'关闭',run:close}]);
+  const data=await api('history');
+  modal('最近操作记录',data.operations.length?data.operations.map((o,i)=>'<section class="preview-item"><h3>'+esc(new Date(o.startedAt).toLocaleString())+' · '+esc(o.mode==='demo'?'演示':'真实')+' · '+esc(o.packageName)+'</h3>'+o.results.map(r=>'<div class="result-row"><b>'+esc(r.productId)+' · '+esc(r.status)+'</b><p>'+esc(r.message)+'</p>'+resultSteps(r)+'</div>').join('')+
+    (o.mode===mode&&o.packageName===(mode==='demo'?'com.example.demo':settings.current.packageName)&&o.results.some(r=>r.status!=='verified')?'<button id="recoverHistory'+i+'">核对未完成项</button>':'')+
+    '<p class="help">'+esc(o.file)+'</p></section>').join(''):'<p class="help">还没有提交记录。</p>',[{label:'关闭',run:close}]);
+  data.operations.forEach((o,i)=>{if($('recoverHistory'+i))bind('recoverHistory'+i,()=>recoverResult(o.file));});
 }
 async function init(){
-  token=(await(await fetch('/api/session')).json()).token;settings=await api('config');await restoreVisit();restore();
+  const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
+  bind('about',()=>modal('关于 PlayBatch','<h3>Google Play 商品工作台</h3><p>由 <a href="https://github.com/qiaoxuelin" target="_blank" rel="noreferrer">qiaoxuelin</a> 开发</p><p>当前版本：'+esc(session.version||'未知')+'</p><p>一次性商品批量创建、地区改价、多语言与状态管理。</p><p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">查看新版与更新说明 ↗</a></p>',[{label:'关闭',run:close}]));settings=await api('config');await restoreVisit();restore();
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});

@@ -4,7 +4,7 @@ $gpRoot=$PSScriptRoot
 $gpDist=Join-Path $gpRoot 'dist'
 New-Item -ItemType Directory -Force -Path $gpDist | Out-Null
 $gpVersion=(Get-Content (Join-Path $gpRoot 'package.json') -Raw | ConvertFrom-Json).version
-$gpName="GP-Product-Workbench-$gpVersion-Windows-x64"
+$gpName="PlayBatch-$gpVersion-Windows-x64"
 $gpStage=Join-Path $gpDist ($gpName+'-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $gpStage | Out-Null
 $gpArchive="node-$NodeVersion-win-x64.zip"

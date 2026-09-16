@@ -119,20 +119,21 @@ function changes(before,after,path='') {
 }
 function parseCSV(text) {
   text=text.replace(/^\uFEFF/,'');
-  const rows=[]; let row=[],s='',q=false;
+  const rows=[],rowLines=[]; let row=[],s='',q=false,line=1,startLine=1;
   for(let i=0;i<text.length;i++){
     const c=text[i];
-    if(c==='"'){if(q&&text[i+1]==='"'){s+='"';i++;}else if(q||s==='') q=!q;else throw Error('CSV 引号格式错误');}
+    if(c==='\r'||c==='\n'&&text[i-1]!=='\r')line++;
+    if(c==='"'){if(q&&text[i+1]==='"'){s+='"';i++;}else if(q||s==='') q=!q;else throw Error('CSV 第 '+line+' 行引号格式错误');}
     else if(c===','&&!q){row.push(s);s='';}
-    else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&text[i+1]==='\n')i++;row.push(s);if(row.some(Boolean))rows.push(row);row=[];s='';}
+    else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&text[i+1]==='\n')i++;row.push(s);if(row.some(Boolean)){rows.push(row);rowLines.push(startLine);}row=[];s='';startLine=line;}
     else s+=c;
   }
-  if(q) throw Error('CSV 引号未闭合');
-  row.push(s);if(row.some(Boolean))rows.push(row);
+  if(q) throw Error('CSV 第 '+startLine+' 行引号未闭合');
+  row.push(s);if(row.some(Boolean)){rows.push(row);rowLines.push(startLine);}
   if(!rows.length)throw Error('CSV 为空');
-  const headers=rows.shift();
+  const headers=rows.shift();rowLines.shift();
   if(new Set(headers).size!==headers.length)throw Error('CSV 表头重复');
-  return rows.map((r,i)=>{if(r.length!==headers.length)throw Error('CSV 第 '+(i+2)+' 行列数不符');return Object.fromEntries(headers.map((h,j)=>[h,r[j]]));});
+  return rows.map((r,i)=>{if(r.length!==headers.length)throw Error('CSV 第 '+rowLines[i]+' 行列数不符');return Object.fromEntries(headers.map((h,j)=>[h,r[j]]));});
 }
 const csvHeaders=['productId','purchaseOptionId','languageCode','title','description','regionCode','currencyCode','price','availability'];
 function importCSV(text,existing,packageName) {

@@ -3,6 +3,7 @@ const http=require('node:http'), fs=require('node:fs'), path=require('node:path'
 const C=require('./core');
 const Cred=require('./credentials');
 const publicSettings=()=>({profiles:settings.profiles.map(Cred.publicProfile),activeId:settings.activeId,current:Cred.publicProfile(config)});
+const APP_VERSION=require('./package.json').version;
 const ROOT=__dirname,DATA=process.env.GP_DATA_DIR||path.join(ROOT,'data');
 fs.mkdirSync(DATA,{recursive:true});
 const SCHEMAS=JSON.parse(fs.readFileSync(path.join(ROOT,'google-api-discovery.json'),'utf8')).schemas;
@@ -132,46 +133,76 @@ async function commit(body) {
   if(body.packageName!==plan.packageName||body.mode!==plan.mode)throw Error('提交目标与预览不一致');
   if(plan.configHash!==C.hash(config))throw Error('连接设置已变化，请重新预览');
   plans.delete(plan.id);
-  const record={id:plan.id,mode:plan.mode,packageName:plan.packageName,startedAt:new Date().toISOString(),entries:plan.entries,results:[]};
+  const record={id:plan.id,mode:plan.mode,profileId:plan.mode==='live'?config.id:null,packageName:plan.packageName,startedAt:new Date().toISOString(),entries:plan.entries,results:[]};
   const logName='operation-'+Date.now()+'-'+plan.id+'.json';
   save(logName,record);
   for(const e of plan.entries) {
-    const id=e.after.productId;let wrote=false,confirmedWrite=false;
+    const id=e.after.productId;let wrote=false,confirmedWrite=false,stage='check';
+    const steps={check:'pending',configuration:e.updateMask.length?'pending':'skipped',state:Object.keys(e.states).length?'pending':'skipped',readback:'pending'};
     try{
       const fresh=await getProduct(plan.mode,id);
       if(!C.equal(fresh,e.before))throw Error('远端已变化，未写入；请刷新后重新编辑');
+      steps.check='success';
       if(plan.mode==='demo'){
         let next=C.clone(e.after);next.regionsVersion=e.regionsVersion;
         for(const o of next.purchaseOptions)o.state=e.states[o.purchaseOptionId]||e.before?.purchaseOptions.find(x=>x.purchaseOptionId===o.purchaseOptionId)?.state||'DRAFT';
         demo=demo.filter(p=>p.productId!==id);demo.push(next);save('demo.json',demo);wrote=true;
+        steps.configuration=e.updateMask.length?'success':'skipped';steps.state=Object.keys(e.states).length?'success':'skipped';
       }else{
         if(e.updateMask.length){
-          wrote=true;
+          stage='configuration';wrote=true;
           await google('POST','/oneTimeProducts:batchUpdate',{requests:[{oneTimeProduct:C.writable(e.after),updateMask:e.updateMask.join(','),regionsVersion:e.regionsVersion,allowMissing:!e.before}]});
-          confirmedWrite=true;
+          confirmedWrite=true;steps.configuration='success';
         }
         const requests=Object.entries(e.states).filter(([oid,target])=>e.before?.purchaseOptions.find(o=>o.purchaseOptionId===oid)?.state!==target).map(([oid,target])=>({
           [target==='ACTIVE'?'activatePurchaseOptionRequest':'deactivatePurchaseOptionRequest']:{packageName:plan.packageName,productId:id,purchaseOptionId:oid}
         }));
-        if(requests.length){wrote=true;for(let i=0;i<requests.length;i+=100){await google('POST','/oneTimeProducts/'+encodeURIComponent(id)+'/purchaseOptions:batchUpdateStates',{requests:requests.slice(i,i+100)});confirmedWrite=true;}}
+        if(requests.length){stage='state';wrote=true;for(let i=0;i<requests.length;i+=100){await google('POST','/oneTimeProducts/'+encodeURIComponent(id)+'/purchaseOptions:batchUpdateStates',{requests:requests.slice(i,i+100)});confirmedWrite=true;}steps.state='success';}
       }
+      stage='readback';
       const actual=await getProduct(plan.mode,id);
       const fieldsOK=e.updateMask.every(k=>projectContains(C.writable(actual||{})[k],C.writable(e.after)[k]));
       const statesOK=Object.entries(e.states).every(([oid,t])=>actual?.purchaseOptions.find(o=>o.purchaseOptionId===oid)?.state===t);
-      record.results.push({productId:id,status:fieldsOK&&statesOK?'verified':'pending',message:fieldsOK&&statesOK?'已提交并读回核对；购买选项：'+actual.purchaseOptions.map(o=>o.purchaseOptionId+' '+({ACTIVE:'已启用',DRAFT:'草稿（未启用）',INACTIVE:'已停用'}[o.state]||o.state)).join('、'):'已提交，读回尚未完全一致，请刷新核对后再决定是否重试',actual});
+      steps.readback=fieldsOK&&statesOK?'success':'pending';
+      record.results.push({productId:id,steps,status:fieldsOK&&statesOK?'verified':'pending',message:fieldsOK&&statesOK?'已提交并读回核对；购买选项：'+actual.purchaseOptions.map(o=>o.purchaseOptionId+' '+({ACTIVE:'已启用',DRAFT:'草稿（未启用）',INACTIVE:'已停用'}[o.state]||o.state)).join('、'):'已提交，读回尚未完全一致，请刷新核对后再决定是否重试',actual});
     }catch(err){
+      steps[stage]=[400,401,403,404].includes(err.status)||!wrote?'failed':'uncertain';
       const rejected=!confirmedWrite&&[400,401,403,404].includes(err.status);
       const uncertain=wrote&&!rejected;
       const hint=/request billing permission/i.test(err.message)?' 处理建议：核对目标包名 '+plan.packageName+'，并检查上传到 Play Console 的应用包是否声明 com.android.vending.BILLING；这不是单纯增加服务账号管理权限可以解决的问题。':'';
-      record.results.push({productId:id,status:uncertain?'uncertain':'failed',message:(uncertain?'可能已部分写入，请先刷新核对。':rejected?'Google 已拒绝此请求，未写入。':'')+err.message+hint});
+      record.results.push({productId:id,steps,status:uncertain?'uncertain':'failed',message:(uncertain?'可能已部分写入，请先刷新核对。':rejected?'Google 已拒绝此请求，未写入。':'')+err.message+hint});
     }
     save(logName,record);
   }
   record.finishedAt=new Date().toISOString();save(logName,record);
   return {results:record.results,logFile:logName};
 }
+
+async function recoverOperation(b){
+  if(!/^operation-[a-zA-Z0-9-]+\.json$/.test(b.logFile||''))throw Error('操作记录标识无效');
+  const record=read(b.logFile,null);
+  if(!record||record.mode!==b.mode||record.packageName!==packageFor(b.mode)||(b.mode==='live'&&record.profileId!==config.id))throw Error('操作记录不属于当前项目，或旧记录无法自动核对');
+  const entries=[],resolved=[],blocked=[];
+  for(const result of record.results.filter(r=>r.status!=='verified')){
+    const e=record.entries.find(x=>x.after.productId===result.productId);if(!e)continue;
+    try{
+      const actual=await getProduct(b.mode,result.productId);
+      const fieldsOK=actual&&e.updateMask.every(k=>projectContains(C.writable(actual)[k],C.writable(e.after)[k]));
+      const remaining=Object.fromEntries(Object.entries(e.states).filter(([id,state])=>actual?.purchaseOptions.find(o=>o.purchaseOptionId===id)?.state!==state));
+      if(fieldsOK){
+        if(!Object.keys(remaining).length)resolved.push({productId:result.productId,actual});
+        else entries.push({before:actual,after:C.clone(actual),states:remaining,reason:'配置已核对，仅补做未完成的启用/停用'});
+      }else if(C.equal(actual,e.before)){
+        entries.push({before:actual,after:e.after,states:e.states,reason:'远端仍与原始版本一致，可重新预览未完成操作'});
+      }else blocked.push({productId:result.productId,message:'远端配置与提交前和目标版本均不一致，请手动核对；未覆盖本地草稿'});
+    }catch(err){blocked.push({productId:result.productId,message:err.message});}
+  }
+  return {entries,resolved,blocked};
+}
 async function route(url,b) {
   if(b.mode==='live'&&!url.startsWith('/api/config')&&b.profileId!==config.id)throw Error('当前项目已切换，请重新选择项目并读取商品');
+  if(url==='/api/recover')return recoverOperation(b);
+  if(url==='/api/import/inspect'){const rows=C.parseCSV(b.csv);return {rows:rows.slice(0,8),count:rows.length};}
   if(url==='/api/config')return publicSettings();
   if(url==='/api/config/switch'){
     const next=settings.profiles.find(p=>p.id===b.id);if(!next)throw Error('项目不存在');
@@ -245,7 +276,7 @@ const server=http.createServer(async(req,res)=>{
   if(!['127.0.0.1:'+PORT,'localhost:'+PORT].includes(host))return send(res,403,{error:'禁止此 Host'});
   if(req.headers.origin&&!['http://127.0.0.1:'+PORT,'http://localhost:'+PORT].includes(req.headers.origin))return send(res,403,{error:'禁止跨站访问'});
   const url=new URL(req.url,'http://'+host).pathname;
-  if(req.method==='GET'&&url==='/api/session')return send(res,200,{token:SESSION,application:'gp-product-workbench'});
+  if(req.method==='GET'&&url==='/api/session')return send(res,200,{token:SESSION,application:'gp-product-workbench',version:APP_VERSION});
   if(req.method==='GET'&&['/','/app.js','/style.css'].includes(url)){
     const file=url==='/'?'index.html':url.slice(1),type=file.endsWith('.html')?'text/html':file.endsWith('.js')?'text/javascript':'text/css';
     return send(res,200,fs.readFileSync(path.join(ROOT,'public',file)),type+'; charset=utf-8');

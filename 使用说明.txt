@@ -1,4 +1,6 @@
-﻿GP 商品工作台 · Windows x64 免安装版
+﻿PlayBatch · Google Play 商品工作台
+由 qiaoxuelin 开发：https://github.com/qiaoxuelin
+Windows x64 免安装版
 
 1. 先将 ZIP 完整解压到本地文件夹，不要在压缩包内运行。
 2. 双击“启动工具.cmd”，浏览器会自动打开。
@@ -13,3 +15,7 @@
 项目配置、加密授权及操作记录保存在 %LOCALAPPDATA%\GP-Product-Workbench。
 草稿在原浏览器的本地存储中，请继续使用同一浏览器及 http://127.0.0.1:4318。
 凭据使用 Windows 当前用户加密，换电脑或用户时应重新导入。
+
+版本与更新：侧栏或“关于 PlayBatch”查看版本，点击新版下载进入 GitHub。
+导入：选择文件后先核对编码与内容预览；可手动切换编码。
+提交失败：在结果或操作记录中点击“核对未完成项”，核对远端后重新预览；不会自动重复创建已完成商品。
