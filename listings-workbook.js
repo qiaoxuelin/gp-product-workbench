@@ -14,9 +14,6 @@ function exportWorkbook(products,languages=[]){
     const sheet=X.utils.aoa_to_sheet([headers,...products.map(p=>{const r=values.get(p.productId);return [p.productId,r?.title||'',r?.description||''];})]);
     sheet['!cols']=[{wch:32},{wch:48},{wch:90}];sheet['!autofilter']={ref:sheet['!ref']};
     for(const cell of Object.values(sheet))if(cell&&cell.t==='s')cell.z='@';
-    sheet.A1.c=[{a:'PlayBatch',t:'商品 ID，请保留原值。页签名是语言代码，请勿改成语言中文名称。'}];
-    sheet.B1.c=[{a:'PlayBatch',t:'商品名称，1–55 个字符。名称和描述都为空时跳过该行。'}];
-    sheet.C1.c=[{a:'PlayBatch',t:'商品描述，1–200 个字符。支持换行。请粘贴纯文本，不使用公式。'}];
     X.utils.book_append_sheet(wb,sheet,lang);
   }
   return Buffer.from(X.write(wb,{type:'buffer',bookType:'xlsx',compression:true}));
