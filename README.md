@@ -1,9 +1,11 @@
-# GP 商品工作台
+# PlayBatch · Google Play 商品工作台
 
-**面向 Google Play 一次性商品的 Windows 本地管理工具。**  
+**面向 Google Play 一次性商品的 Windows 本地管理工具。**
 批量创建商品、调整地区价格、上传多语言文案，在提交前集中核对差异，减少后台重复操作。
 
 **[下载 Windows 免安装版](https://github.com/qiaoxuelin/gp-product-workbench/releases/latest)** · [查看版本更新](https://github.com/qiaoxuelin/gp-product-workbench/releases) · [反馈问题](https://github.com/qiaoxuelin/gp-product-workbench/issues)
+
+PlayBatch 是本项目的产品名；发布包文件名沿用 GP-Product-Workbench。
 
 适用于 Windows 10 / 11 x64。下载包内置运行环境，无需安装 Node.js；界面在本机浏览器中打开，连接 Google 时需要网络。
 
@@ -80,7 +82,7 @@ coins_100,buy,zh-CN,100金币,购买后获得100金币,ALL,USD,0.99,AVAILABLE
 
 ### 多语言模板
 
-**批量入口**：首页“多语言模板”；勾选商品则处理所选商品，否则处理当前项目全部商品。  
+**批量入口**：首页“多语言模板”；勾选商品则处理所选商品，否则处理当前项目全部商品。
 **单商品入口**：编辑商品 → 多语言模板。
 
 1. 勾选需要追加的语言，下载模板。
