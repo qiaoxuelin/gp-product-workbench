@@ -292,7 +292,7 @@ const server=http.createServer(async(req,res)=>{
   if(req.headers.origin&&!['http://127.0.0.1:'+PORT,'http://localhost:'+PORT].includes(req.headers.origin))return send(res,403,{error:'禁止跨站访问'});
   const url=new URL(req.url,'http://'+host).pathname;
   if(req.method==='GET'&&url==='/api/session')return send(res,200,{token:SESSION,application:'gp-product-workbench',version:APP_VERSION});
-  if(req.method==='GET'&&['/','/app.js','/style.css','/product-guide.html'].includes(url)){
+  if(req.method==='GET'&&['/','/app.js','/style.css'].includes(url)){
     const file=url==='/'?'index.html':url.slice(1),type=file.endsWith('.html')?'text/html':file.endsWith('.js')?'text/javascript':'text/css';
     return send(res,200,fs.readFileSync(path.join(ROOT,'public',file)),type+'; charset=utf-8');
   }
