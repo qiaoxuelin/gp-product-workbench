@@ -27,7 +27,8 @@ Remove-Item -LiteralPath $gpResolved -Recurse -Force
 $gpFiles=@('server.js','core.js','credentials.js','finance.js','google-api-discovery.json','package.json','README.md','GOOGLE_AUTH_GUIDE.html','start.ps1','stop.ps1','start.cmd','stop.cmd','启动工具.cmd','停止工具.cmd','使用说明.txt')
 foreach ($gpFile in $gpFiles) { Copy-Item -LiteralPath (Join-Path $gpRoot $gpFile) -Destination $gpStage }
 New-Item -ItemType Directory -Path (Join-Path $gpStage 'public') | Out-Null
-foreach ($gpFile in @('app.js','index.html','style.css')) { Copy-Item -LiteralPath (Join-Path $gpRoot "public\$gpFile") -Destination (Join-Path $gpStage 'public') }
+foreach ($gpFile in @('app.js','index.html','style.css','product-guide.html')) { Copy-Item -LiteralPath (Join-Path $gpRoot "public\$gpFile") -Destination (Join-Path $gpStage 'public') }
+Copy-Item -LiteralPath (Join-Path $gpRoot 'public\product-guide.html') -Destination (Join-Path $gpStage '产品说明.html')
 $gpZip=Join-Path $gpDist ($gpName+'.zip')
 if (Test-Path -LiteralPath $gpZip) { throw 'Release archive already exists; increment version or archive it first.' }
 Compress-Archive -Path (Join-Path $gpStage '*') -DestinationPath $gpZip -CompressionLevel Optimal
