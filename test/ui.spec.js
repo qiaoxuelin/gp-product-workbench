@@ -389,3 +389,44 @@ test('unfinished result requires remote review and a new confirmation before ret
   await expect(page.locator('#dialogTitle')).toContainText('提交前预览');
   await expect(page.locator('#confirmWrite')).not.toBeChecked();expect(writes).toBe(1);
 });
+
+test('monthly finance UI saves account report address, downloads original bytes and invalidates changed month',async({page})=>{
+  const profile={id:'finance-project',name:'财务测试项目',packageName:'com.example.finance',hasCredential:true,credentialEmail:'finance@example.iam.gserviceaccount.com',financialBucket:''};
+  await page.route('**/api/config',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({profiles:[profile],activeId:profile.id,current:profile})}));
+  await page.route('**/api/finance/config',route=>{
+    const b=route.request().postDataJSON();expect(b.profileId).toBe(profile.id);expect(b.mode).toBe('live');
+    profile.financialBucket=b.bucket.replace(/^gs:\/\//,'').split('/')[0];
+    return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({profiles:[profile],activeId:profile.id,current:profile})});
+  });
+  await page.route('**/api/finance/list',route=>{
+    expect(route.request().postDataJSON().month).toBe('2026-08');
+    return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({month:'2026-08',bucket:profile.financialBucket,scope:'developer-account',files:[{id:'report-ticket',name:'earnings_202608.zip',size:'12',generation:'123',updated:'2026-09-05T00:00:00Z'}]})});
+  });
+  const original=Buffer.from('original zip');
+  await page.route('**/api/finance/download',route=>{
+    expect(route.request().postDataJSON().reportId).toBe('report-ticket');
+    return route.fulfill({status:200,contentType:'application/zip',body:original});
+  });
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('#finance').click();
+  await expect(page.locator('#dialogBody')).toContainText('当前为演示模式');
+  await page.getByRole('button',{name:'关闭',exact:true}).last().click();
+  await page.locator('#mode').selectOption('live');
+  await page.locator('#finance').click();
+  await expect(page.locator('#dialogBody')).toContainText('开发者账号全部应用');
+  await page.locator('#financeBucket').fill('gs://pubsite_prod_rev_finance/earnings/');
+  await page.locator('#financeYear').selectOption('2026');await page.locator('#financeMonth').selectOption('08');
+  await page.locator('#financeList').click();
+  await expect(page.locator('#financeFiles')).toContainText('earnings_202608.zip');
+  await page.screenshot({path:'data/ui-finance.png',fullPage:true});
+  const event=page.waitForEvent('download');await page.locator('#financeDownload0').click();
+  const file=await event;expect(file.suggestedFilename()).toBe('earnings_202608.zip');
+  const chunks=[];for await(const chunk of await file.createReadStream())chunks.push(chunk);
+  expect(Buffer.concat(chunks)).toEqual(original);
+  await page.locator('#financeMonth').selectOption('07');
+  await expect(page.locator('#financeFiles')).toContainText('重新读取');
+  await expect(page.locator('#financeDownload0')).toHaveCount(0);
+  await page.getByRole('button',{name:'关闭',exact:true}).last().click();
+  await page.locator('#finance').click();
+  await expect(page.locator('#financeBucket')).toHaveValue('pubsite_prod_rev_finance');
+});

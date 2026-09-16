@@ -2,6 +2,8 @@
 const http=require('node:http'), fs=require('node:fs'), path=require('node:path'), crypto=require('node:crypto');
 const C=require('./core');
 const Cred=require('./credentials');
+const Finance=require('./finance');
+const finance=Finance.createFinance(accessToken);
 const publicSettings=()=>({profiles:settings.profiles.map(Cred.publicProfile),activeId:settings.activeId,current:Cred.publicProfile(config)});
 const APP_VERSION=require('./package.json').version;
 const ROOT=__dirname,DATA=process.env.GP_DATA_DIR||path.join(ROOT,'data');
@@ -25,16 +27,17 @@ function seed() {
   }));
 }
 let demo=read('demo.json',seed());
-async function accessToken() {
-  if(tokenCache&&tokenCache.expires>Date.now()+60000)return tokenCache.token;
+async function accessToken(scope='https://www.googleapis.com/auth/androidpublisher') {
+  if(!['https://www.googleapis.com/auth/androidpublisher',Finance.SCOPE].includes(scope))throw Error('授权范围无效');
+  if(tokenCache&&tokenCache.scope===scope&&tokenCache.expires>Date.now()+60000)return tokenCache.token;
   const key=Cred.loadCredential(DATA,config);
   const now=Math.floor(Date.now()/1000), b64=v=>Buffer.from(JSON.stringify(v)).toString('base64url');
-  const unsigned=b64({alg:'RS256',typ:'JWT'})+'.'+b64({iss:key.client_email,scope:'https://www.googleapis.com/auth/androidpublisher',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
+  const unsigned=b64({alg:'RS256',typ:'JWT'})+'.'+b64({iss:key.client_email,scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
   let signature;try{signature=crypto.sign('RSA-SHA256',Buffer.from(unsigned),key.private_key).toString('base64url');}catch{throw Error('服务账号私钥无效');}
   const response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:unsigned+'.'+signature}),signal:AbortSignal.timeout(30000),redirect:'error'});
   const result=await response.json();
   if(!response.ok)throw Error('Google 授权失败：'+(result.error_description||result.error||response.status));
-  tokenCache={token:result.access_token,expires:Date.now()+Number(result.expires_in||3600)*1000};
+  tokenCache={scope,token:result.access_token,expires:Date.now()+Number(result.expires_in||3600)*1000};
   return tokenCache.token;
 }
 async function google(method,suffix,body) {
@@ -201,6 +204,18 @@ async function recoverOperation(b){
 }
 async function route(url,b) {
   if(b.mode==='live'&&!url.startsWith('/api/config')&&b.profileId!==config.id)throw Error('当前项目已切换，请重新选择项目并读取商品');
+  if(url.startsWith('/api/finance/')){
+    if(b.mode!=='live')throw Error('账单导出需要真实项目及 Google 财务权限，演示模式不提供真实账单');
+    if(!config.id)throw Error('请先配置项目');
+    if(url==='/api/finance/config'){
+      const bucket=b.bucket?.trim()?Finance.normalizeBucket(b.bucket):'';
+      const nextSettings=C.clone(settings);const next=nextSettings.profiles.find(p=>p.id===config.id);next.financialBucket=bucket;
+      save('config.json',nextSettings);settings=nextSettings;config=next;plans.clear();return publicSettings();
+    }
+    if(!config.financialBucket)throw Error('请先保存财务报告存储桶地址');
+    if(url==='/api/finance/list')return finance.list(config,b.month);
+    if(url==='/api/finance/download')return {_download:await finance.download(config,b.reportId)};
+  }
   if(url==='/api/recover')return recoverOperation(b);
   if(url==='/api/import/inspect'){const rows=C.parseCSV(b.csv);return {rows:rows.slice(0,8),count:rows.length};}
   if(url==='/api/config')return publicSettings();
@@ -290,7 +305,14 @@ const server=http.createServer(async(req,res)=>{
     // Recheck after asynchronous request parsing to serialize mutations.
     if(busy)return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
     busy=true;
-    try{send(res,200,await route(url,body));}finally{busy=false;}
+    try{
+      const result=await route(url,body);
+      if(result?._download){
+        const file=result._download;
+        res.writeHead(200,{'Content-Type':file.name.endsWith('.zip')?'application/zip':'text/csv','Content-Disposition':'attachment; filename="'+file.name+'"','Content-Length':file.bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-File-SHA256':file.sha256});
+        res.end(file.bytes);
+      }else send(res,200,result);
+    }finally{busy=false;}
   }catch(e){send(res,400,{error:e.message});}
 });
 if(require.main===module)server.listen(PORT,'127.0.0.1',()=>console.log('GP Product Workbench: http://127.0.0.1:'+PORT));

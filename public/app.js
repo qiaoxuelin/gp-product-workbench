@@ -10,11 +10,12 @@ function matchesProductState(p){return productStateFilter==='all'||p.purchaseOpt
 function visibleProducts(){return draft.filter(p=>matchesProductState(p)&&(p.productId+' '+p.listings.map(l=>l.title).join(' ')).toLowerCase().includes(search.toLowerCase())&&(catalogFilter==='all'||(catalogFilter==='dirty'?dirty(p):selected.has(p.productId))));}
 function syncActions(){for(const id of ['copy','price','activate','deactivate','discard']){const disabled=working||!selected.size||(id==='copy'&&selected.size!==1);$(id).disabled=disabled;$(id).title=!selected.size?'请先勾选商品':id==='copy'&&selected.size!==1?'请选择一个商品作为复制模板':'';}$('clearSelection').hidden=!selected.size;document.querySelector('.batch').classList.toggle('has-selection',selected.size>0);}
 function status(message,error=false){$('status').textContent=message;$('status').className=error?'error':'';}
-async function api(url,body={}){
+async function api(url,body={},binary=false){
   // Freeze the target and payload across a retry; only a request rejected before routing is retried.
   const payload=JSON.stringify({...body,...(body.mode==='live'?{profileId:settings.activeId}:{})});
   for(let attempt=0;attempt<2;attempt++){
     const r=await fetch('/api/'+url,{method:'POST',headers:{'Content-Type':'application/json','X-GP-Token':token},body:payload});
+    if(binary&&r.ok)return {blob:await r.blob(),sha256:r.headers.get('X-File-SHA256')};
     const data=await r.json();
     if(r.status===403&&data.error==='请从本机工具页面操作'&&attempt===0){
       const sessionResponse=await fetch('/api/session',{cache:'no-store'});
@@ -419,9 +420,53 @@ async function history(){
     '<p class="help">'+esc(o.file)+'</p></section>').join(''):'<p class="help">还没有提交记录。</p>',[{label:'关闭',run:close}]);
   data.operations.forEach((o,i)=>{if($('recoverHistory'+i))bind('recoverHistory'+i,()=>recoverResult(o.file));});
 }
+
+function financeDialog(){
+  const now=new Date(),previous=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,1));
+  const year=previous.getUTCFullYear(),month=String(previous.getUTCMonth()+1).padStart(2,'0');
+  modal('月度账单导出','<p class="help">下载 Google Earnings 收入报告，保留收入、退款、Google 费用、税费等原始交易行，方便财务核对。</p>'+
+    '<div class="warning"><b>账单范围：开发者账号全部应用</b><br>当前项目只用于选择授权和报告地址，原始账单不会按包名过滤。Earnings 报告是交易与收入明细，不是银行到账凭证。</div>'+
+    (mode==='demo'?'<p class="error-box">当前为演示模式。请关闭窗口，在首页切换到真实项目后导出账单。</p>':'')+
+    '<p>当前授权项目：<b>'+esc(settings.current.name||'未配置')+'</b> · '+esc(settings.current.credentialEmail||'尚未导入服务账号')+'</p>'+
+    '<div class="form-grid"><label class="field wide">财务报告 Cloud Storage 地址<input id="financeBucket" value="'+esc(settings.current.financialBucket||'')+'" placeholder="粘贴 gs://pubsite_prod_rev_… 或存储桶名称"></label>'+
+    '<label class="field">账单年份<select id="financeYear">'+Array.from({length:now.getUTCFullYear()-2008+1},(_,i)=>now.getUTCFullYear()-i).map(y=>'<option '+(y===year?'selected':'')+'>'+y+'</option>').join('')+'</select></label>'+
+    '<label class="field">账单月份<select id="financeMonth">'+Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0')).map(m=>'<option value="'+m+'" '+(m===month?'selected':'')+'>'+Number(m)+' 月</option>').join('')+'</select></label></div>'+
+    '<div class="finance-actions"><button id="financeSave">保存报告地址</button><button class="primary" id="financeList">保存地址并读取该月账单</button></div>'+
+    '<div id="financeFiles" aria-live="polite"><p class="help">选好月份后读取账单。已有商品管理权限不代表具备财务报告权限。</p></div>'+
+    '<details class="auth-guide"><summary>首次配置与权限说明</summary><ol><li>打开 Play Console → 下载报告 → 财务，找到收入报告（Earnings）。</li><li>点击该栏目旁的“复制 Cloud Storage URI”，粘贴到上方并保存。通常以 <code>gs://pubsite_prod_rev_</code> 开头。</li><li>在 Play Console 用户和权限中选择当前服务账号：在账号级范围授予查看应用信息/下载批量报告，以及查看财务数据的全局权限。仅授予某个应用的权限可能无法下载账号账单。</li><li>可复用项目中已保存的服务账号 JSON；由管理员补充财务只读权限后重新读取。这里不需要授予退款操作权限。</li></ol><p>报告按 Google 月份下载，可能延迟发布或存在补充调整文件。请核对同月所有文件；原始 ZIP 内的 CSV 通常为 UTF-16，可用 Excel 打开。工具不改写金额、不跨币种汇总。</p><a href="https://support.google.com/googleplay/android-developer/answer/6135870?hl=zh-Hans" target="_blank" rel="noreferrer">Google 官方财务报告与权限说明 ↗</a></details>',
+    [{label:'关闭',run:close}]);
+  let lastList=null;
+  const financeJob=async(fn,message)=>{const fields=['financeBucket','financeYear','financeMonth'].map($);fields.forEach(el=>el.disabled=true);try{return await job(fn,message);}finally{fields.forEach(el=>el.disabled=false);}};
+
+  const clear=()=>{lastList=null;$('financeFiles').innerHTML='<p class="help">配置或月份已改变，请重新读取账单。</p>';};
+  $('financeBucket').oninput=clear;$('financeYear').onchange=clear;$('financeMonth').onchange=clear;
+  const saveConfig=async()=>{
+    if(mode!=='live')throw Error('请先切换到真实项目');
+    settings=await api('finance/config',{mode,bucket:$('financeBucket').value});
+    $('financeBucket').value=settings.current.financialBucket;renderHeader();
+  };
+  bind('financeSave',async()=>{await financeJob(saveConfig,'正在保存报告地址…');clear();status('财务报告地址已保存到当前项目');});
+  bind('financeList',async()=>{
+    $('financeFiles').innerHTML='<p class="help">正在读取该月收入报告…</p>';
+    try{
+      const result=await financeJob(async()=>{await saveConfig();return api('finance/list',{mode,month:$('financeYear').value+'-'+$('financeMonth').value});},'正在读取 Google 月度收入报告…');
+      lastList=result;
+      $('financeFiles').innerHTML=result.files.length?'<p class="help">'+esc(result.month)+' · 共 '+result.files.length+' 个文件 · 开发者账号全部应用。请同时核对补充调整文件。</p><div class="finance-table"><table><thead><tr><th>原始文件</th><th>大小</th><th>更新时间</th><th></th></tr></thead><tbody>'+result.files.map((f,i)=>'<tr><td>'+esc(f.name)+'<small>版本 '+esc(f.generation)+'</small></td><td>'+esc((Number(f.size)/1024/1024).toFixed(2))+' MB</td><td>'+esc(f.updated?new Date(f.updated).toLocaleString():'—')+'</td><td><button id="financeDownload'+i+'">下载原始账单</button></td></tr>').join('')+'</tbody></table></div>':'<p class="help">该月没有可下载的收入报告。可能尚未发布、该月无报告或地址不匹配；请核对月份和报告地址。</p>';
+      result.files.forEach((f,i)=>bind('financeDownload'+i,async()=>{
+        if(lastList!==result)throw Error('列表已变化，请重新读取');
+        const data=await financeJob(()=>api('finance/download',{mode,reportId:f.id},true),'正在下载并核对原始账单，请稍候…');
+        const url=URL.createObjectURL(data.blob),a=document.createElement('a');a.href=url;a.download=f.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+        status('已导出 '+f.name+'（开发者账号全部应用）');
+      }));
+      status('已读取 '+result.files.length+' 个账单文件');
+    }catch(e){lastList=null;$('financeFiles').innerHTML='<p class="help">账单读取未完成，请按错误说明处理后重试。</p>';throw e;}
+  });
+}
+
 async function init(){
   const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
   bind('about',()=>modal('关于 PlayBatch','<h3>Google Play 商品工作台</h3><p>由 <a href="https://github.com/qiaoxuelin" target="_blank" rel="noreferrer">qiaoxuelin</a> 开发</p><p>当前版本：'+esc(session.version||'未知')+'</p><p>一次性商品批量创建、地区改价、多语言与状态管理。</p><p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">查看新版与更新说明 ↗</a></p>',[{label:'关闭',run:close}]));settings=await api('config');await restoreVisit();restore();
+  bind('finance',financeDialog);
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});

@@ -24,7 +24,7 @@ Copy-Item -LiteralPath (Join-Path $gpExtract "node-$NodeVersion-win-x64\LICENSE"
 $gpResolved=(Resolve-Path -LiteralPath $gpExtract).Path
 if (-not $gpResolved.StartsWith($gpStage+[IO.Path]::DirectorySeparatorChar)) { throw 'Unsafe extraction path' }
 Remove-Item -LiteralPath $gpResolved -Recurse -Force
-$gpFiles=@('server.js','core.js','credentials.js','google-api-discovery.json','package.json','README.md','GOOGLE_AUTH_GUIDE.html','start.ps1','stop.ps1','start.cmd','stop.cmd','启动工具.cmd','停止工具.cmd','使用说明.txt')
+$gpFiles=@('server.js','core.js','credentials.js','finance.js','google-api-discovery.json','package.json','README.md','GOOGLE_AUTH_GUIDE.html','start.ps1','stop.ps1','start.cmd','stop.cmd','启动工具.cmd','停止工具.cmd','使用说明.txt')
 foreach ($gpFile in $gpFiles) { Copy-Item -LiteralPath (Join-Path $gpRoot $gpFile) -Destination $gpStage }
 New-Item -ItemType Directory -Path (Join-Path $gpStage 'public') | Out-Null
 foreach ($gpFile in @('app.js','index.html','style.css')) { Copy-Item -LiteralPath (Join-Path $gpRoot "public\$gpFile") -Destination (Join-Path $gpStage 'public') }

@@ -141,5 +141,33 @@ test('HTTP integration: demo lifecycle, CSRF, multi-project isolation, live adap
 
 
   }
+
+  {
+    const saved=await call('finance/config',{mode:'live',profileId:a.activeId,bucket:'gs://pubsite_prod_rev_finance/earnings/'});
+    assert.equal(saved.current.financialBucket,'pubsite_prod_rev_finance');
+    const fallback=global.fetch,payload=Buffer.from('sample-report');
+    let financialScope=false;
+    global.fetch=async(url,options={})=>{
+      if(String(url)==='https://oauth2.googleapis.com/token'){
+        const jwt=new URLSearchParams(options.body).get('assertion'),claims=JSON.parse(Buffer.from(jwt.split('.')[1],'base64url'));
+        financialScope=claims.scope==='https://www.googleapis.com/auth/devstorage.read_only';
+        return Response.json({access_token:'finance-token',expires_in:3600});
+      }
+      if(String(url).startsWith('https://storage.googleapis.com/')){
+        if(String(url).includes('alt=media'))return new Response(payload);
+        return Response.json({items:[{name:'earnings/earnings_202608.zip',size:String(payload.length),generation:'55',md5Hash:crypto.createHash('md5').update(payload).digest('base64')}]});
+      }
+      return fallback(url,options);
+    };
+    const files=await call('finance/list',{mode:'live',profileId:a.activeId,month:'2026-08'});
+    assert.equal(financialScope,true);assert.equal(files.files.length,1);
+    const dl=await nativeFetch(root+'/api/finance/download',{method:'POST',headers:{'Content-Type':'application/json','X-GP-Token':token},body:JSON.stringify({mode:'live',profileId:a.activeId,reportId:files.files[0].id})});
+    assert.equal(dl.status,200);assert.equal(dl.headers.get('content-type'),'application/zip');
+    assert.deepEqual(Buffer.from(await dl.arrayBuffer()),payload);
+    await call('finance/list',{mode:'demo',month:'2026-08'},400);
+    await call('config/switch',{id:b.activeId});
+    await call('finance/download',{mode:'live',profileId:a.activeId,reportId:files.files[0].id},400);
+    await call('config/switch',{id:a.activeId});
+  }
   const history=await call('history');assert(history.operations.length>=5);
 });

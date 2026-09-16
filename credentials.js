@@ -32,5 +32,5 @@ function loadCredential(data,profile){
   throw Error('请先在连接设置中选择或粘贴服务账号 JSON 并保存');
 }
 function removeCredential(data,file){if(file){try{fs.unlinkSync(credentialFilePath(data,file));}catch{/* The active pointer is already persisted; an orphan encrypted file is harmless. */}}}
-function publicProfile(p){return {id:p.id,name:p.name,packageName:p.packageName,hasCredential:Boolean(p.credentialFile||p.credentialPath),credentialEmail:p.credentialEmail||'',credentialUpdatedAt:p.credentialUpdatedAt||'',legacyCredential:Boolean(p.credentialPath&&!p.credentialFile)};}
+function publicProfile(p){return {id:p.id,name:p.name,packageName:p.packageName,financialBucket:p.financialBucket||'',hasCredential:Boolean(p.credentialFile||p.credentialPath),credentialEmail:p.credentialEmail||'',credentialUpdatedAt:p.credentialUpdatedAt||'',legacyCredential:Boolean(p.credentialPath&&!p.credentialFile)};}
 module.exports={parseCredential,storeCredential,loadCredential,removeCredential,publicProfile};
