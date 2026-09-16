@@ -3,6 +3,7 @@ const http=require('node:http'), fs=require('node:fs'), path=require('node:path'
 const C=require('./core');
 const Cred=require('./credentials');
 const Finance=require('./finance');
+const ListingsWorkbook=require('./listings-workbook');
 const finance=Finance.createFinance(accessToken);
 const publicSettings=()=>({profiles:settings.profiles.map(Cred.publicProfile),activeId:settings.activeId,current:Cred.publicProfile(config)});
 const APP_VERSION=require('./package.json').version;
@@ -257,9 +258,13 @@ async function route(url,b) {
   if(url==='/api/listings/import'){
     const pkg=packageFor(b.mode);
     if(!Array.isArray(b.existing)||b.existing.some(p=>p.packageName!==pkg))throw Error('商品范围与当前项目不符');
-    const products=C.importListingsCSV(b.csv,b.existing);products.forEach(p=>C.validate(p,SCHEMAS));return {products};
+    const result=b.xlsx?ListingsWorkbook.importWorkbook(ListingsWorkbook.decode(b.xlsx),b.existing):{products:C.importListingsCSV(b.csv,b.existing)};result.products.forEach(p=>C.validate(p,SCHEMAS));return result;
   }
-  if(url==='/api/listings/template')return {csv:C.exportListingsCSV(b.products||[],b.languages||[])};
+  if(url==='/api/listings/inspect-xlsx'){const result=ListingsWorkbook.readWorkbook(ListingsWorkbook.decode(b.xlsx));return {count:result.rows.length,sheets:result.sheets,preview:result.rows.slice(0,8)};}
+  if(url==='/api/listings/template'){
+    if(b.format==='xlsx')return {_download:{bytes:ListingsWorkbook.exportWorkbook(b.products||[],b.languages||[]),name:'gp-multilingual-template.xlsx',type:ListingsWorkbook.MIME}};
+    return {csv:C.exportListingsCSV(b.products||[],b.languages||[])};
+  }
   if(url==='/api/export')return {csv:C.exportCSV(b.products||[])};
   if(url==='/api/adjust'){
     const products=C.clone(b.products||[]);let count=0;
@@ -315,7 +320,7 @@ const server=http.createServer(async(req,res)=>{
       const result=await route(url,body);
       if(result?._download){
         const file=result._download;
-        res.writeHead(200,{'Content-Type':file.name.endsWith('.zip')?'application/zip':'text/csv','Content-Disposition':'attachment; filename="'+file.name+'"','Content-Length':file.bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-File-SHA256':file.sha256});
+        res.writeHead(200,{'Content-Type':file.type||(file.name.endsWith('.zip')?'application/zip':'text/csv'),'Content-Disposition':'attachment; filename="'+file.name+'"','Content-Length':file.bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-File-SHA256':file.sha256||crypto.createHash('sha256').update(file.bytes).digest('hex')});
         res.end(file.bytes);
       }else send(res,200,result);
     }finally{busy=false;}

@@ -277,12 +277,26 @@ async function readImportFile(file,id){
   return text.replace(/^\uFEFF/,'');
 }
 
+const isWorkbook=file=>file.name.toLowerCase().endsWith('.xlsx');
+async function workbookBase64(file){
+  if(file.size>5*1024*1024)throw Error('XLSX 文件超过 5MB，请分批导入');
+  return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('无法读取工作簿'));reader.readAsDataURL(file);});
+}
 function bindImportPreview(fileId,encodingId){
   const input=$(fileId),encoding=$(encodingId),box=$(encodingId+'Preview');let revision=0;
   const refresh=async()=>{
     const rev=++revision,file=input.files[0];box.hidden=!file;if(!file)return;
+    const workbook=fileId==='languageFile'&&isWorkbook(file);
+    encoding.closest('label').hidden=workbook;
+    if(workbook)$(encodingId+'Hint').textContent='Excel 工作簿自动读取 Unicode 文本，无需选择 CSV 编码。每个语言页签分别读取。';
     box.textContent='正在读取文件预览…';
     try{
+      if(workbook){
+        const result=await api('listings/inspect-xlsx',{xlsx:await workbookBase64(file)});
+        if(rev!==revision||$(fileId)!==input)return;
+        box.innerHTML='<h4>工作簿内容预览</h4><p>'+result.sheets.map(s=>esc(s.name)+'：'+s.filled+' 条，跳过空白 '+s.skipped+' 行').join('；')+'</p><div class="raw-preview">'+result.preview.map(r=>'<div><span>'+esc(r.sheet+' / '+r.row)+'</span><code>'+esc(r.productId+' | '+r.title+' | '+r.description)+'</code></div>').join('')+'</div><p>共 '+result.count+' 条已填写翻译；点击“检查并预览导入”核对变更。</p>';
+        return;
+      }
       if(file.size>6*1024*1024)throw Error('文件超过 6MB，请分批导入');
       const text=await readImportFile(file,encodingId);
       if(rev!==revision||$(fileId)!==input)return;
@@ -319,11 +333,12 @@ function download(name,text,type){const url=URL.createObjectURL(new Blob([text],
 function languageDialog(editor=null){
   const scope=clone(editor?editor.products:selected.size?picked():draft);
   if(!scope.length)throw Error('请先读取或创建商品，再下载多语言模板');
-  modal('多语言模板导入 · '+scope.length+' 个商品','<p class="help">当前范围：'+(editor?'当前编辑商品 '+esc(scope[0].productId):selected.size?'所选商品':'当前项目的全部商品')+'。每行填写一个商品的一种语言；仅更新名称和描述，未列出的语言、地区和价格均保留。</p><ol class="help"><li>下载模板，已有名称和描述会自动填入。</li><li>用 Excel 等工具编辑，另存为 CSV UTF-8。四列表头保持不变。</li><li>选择文件，检查导入预览后应用到本地草稿。</li></ol><div class="form-grid">'+multiMarkup('templateLanguages','模板中追加的语言（可选，多选）')+'<div class="wide"><button id="downloadLanguages">下载多语言 CSV 模板</button></div><label class="field wide">上传已填写的模板<input id="languageFile" type="file" accept=".csv,text/csv"></label>'+encodingField('languageEncoding')+'</div><p class="help">列：productId / languageCode / title / description。名称最多 55 字符，描述最多 200 字符；新增语言的空白内容需要填写后再导入。同一商品同一语言重复且内容不同会报错。</p>',[
+  modal('多语言模板导入 · '+scope.length+' 个商品','<p class="help">当前范围：'+(editor?'当前编辑商品 '+esc(scope[0].productId):selected.size?'所选商品':'当前项目的全部商品')+'。每种语言一个 Excel 页签；仅更新名称和描述，未列出的语言、地区和价格均保留。</p><ol class="help"><li>下载 Excel 模板，每种语言单独一个页签，已有名称和描述会自动填入。</li><li>在对应语言页签填写名称和描述，保持语言页签名与三列表头不变，保存为 .xlsx。</li><li>选择文件，检查导入预览后应用到本地草稿。</li></ol><div class="form-grid">'+multiMarkup('templateLanguages','模板中追加的语言（可选，多选）')+'<div class="wide"><button id="downloadLanguages">下载多语言 Excel 模板</button></div><label class="field wide">上传已填写的模板<input id="languageFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"></label>'+encodingField('languageEncoding')+'</div><p class="help">Excel 每页三列：productId / title / description，页签名为语言代码（如 zh-CN）。名称最多 55 字符，描述最多 200 字符。名称和描述均空的行跳过，仅填一项会提示补齐。仍兼容原四列 CSV 模板。同一商品同一语言重复且内容不同会报错。</p>',[
     {label:editor?'返回商品编辑':'取消',run:close},{label:'检查并预览导入',class:'primary',run:async()=>{
-      const file=$('languageFile').files[0];if(!file)throw Error('请选择多语言 CSV 模板');
+      const file=$('languageFile').files[0];if(!file)throw Error('请选择多语言 Excel 或 CSV 模板');
       if(file.size>6*1024*1024)throw Error('文件超过 6MB，请分批导入');
-      const result=await api('listings/import',{mode,csv:await readImportFile(file,'languageEncoding'),existing:scope});
+      const payload=isWorkbook(file)?{xlsx:await workbookBase64(file)}:{csv:await readImportFile(file,'languageEncoding')};
+      const result=await job(()=>api('listings/import',{mode,...payload,existing:scope}),'正在读取并检查多语言模板…');
       const rows=[];
       for(const p of result.products)for(const l of p.listings){
         const before=scope.find(x=>x.productId===p.productId)?.listings.find(x=>x.languageCode.toLowerCase()===l.languageCode.toLowerCase());
@@ -339,8 +354,8 @@ function languageDialog(editor=null){
   initMulti('templateLanguages',LANGUAGE_CODES.concat(scope.flatMap(p=>p.listings.map(l=>l.languageCode))),[],'language');
   bind('downloadLanguages',async()=>{
     const languages=$('templateLanguages').selectedValues();
-    const data=await api('listings/template',{products:scope,languages});
-    download('gp-multilingual-template.csv',data.csv,'text/csv;charset=utf-8');
+    const data=await job(()=>api('listings/template',{products:scope,languages,format:'xlsx'},true),'正在生成每种语言一个页签的模板…');
+    download('gp-multilingual-template.xlsx',data.blob,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   });
 }
 function importDialog(){

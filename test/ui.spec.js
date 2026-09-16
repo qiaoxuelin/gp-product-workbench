@@ -187,9 +187,9 @@ test('multilingual template download and upload preview preserves prices and exi
   await page.screenshot({path:'data/ui-language-options.png',fullPage:true});
   await page.locator('#downloadLanguages').click();
   const download=await downloadEvent;
-  expect(download.suggestedFilename()).toBe('gp-multilingual-template.csv');
+  expect(download.suggestedFilename()).toBe('gp-multilingual-template.xlsx');
   const stream=await download.createReadStream();const chunks=[];for await(const chunk of stream)chunks.push(chunk);
-  const csv=Buffer.concat(chunks).toString('utf8');expect(csv).toContain('zh-TW');expect(csv).toContain('ja-JP');
+  const workbook=require('../vendor/xlsx.full.min.js').read(Buffer.concat(chunks),{type:'buffer'});expect(workbook.SheetNames).toEqual(expect.arrayContaining(['zh-TW','ja-JP','zh-CN','en-US']));
   await page.locator('#templateLanguages [data-clear]').click();
   await expect(page.locator('#templateLanguages .choice-summary')).toHaveText('已选 0 项');
   await page.locator('#languageFile').setInputFiles({name:'languages.csv',mimeType:'text/csv',buffer:Buffer.from('productId,languageCode,title,description\r\ncoins_100,zh-TW,100金幣,購買後獲得100金幣')});
@@ -270,12 +270,15 @@ test('single product template preserves unsaved edits and returns to editor befo
   await page.locator('#downloadLanguages').click();
   const download=await downloadEvent;const stream=await download.createReadStream();const chunks=[];
   for await(const chunk of stream)chunks.push(chunk);
-  const csv=Buffer.concat(chunks).toString('utf8');expect(csv).toContain('coins_100');expect(csv).not.toContain('coins_550');
+  const parsed=require('../listings-workbook').readWorkbook(Buffer.concat(chunks));expect(parsed.rows.every(r=>r.productId==='coins_100')).toBeTruthy();
   await page.keyboard.press('Escape');
   await expect(page.locator('#editId')).toHaveValue('coins_100');
   await expect(page.locator('[data-k="price"]').first()).toHaveValue('3.99');
   await page.locator('#editLanguages').click();
-  await page.locator('#languageFile').setInputFiles({name:'single.csv',mimeType:'text/csv',buffer:Buffer.from('productId,languageCode,title,description\ncoins_100,ja-JP,100コイン,100コインを獲得')});
+  const singleWorkbook=require('../listings-workbook').exportWorkbook([{productId:'coins_100',listings:[{languageCode:'ja-JP',title:'100コイン',description:'100コインを獲得'}]}]);
+  await page.locator('#languageFile').setInputFiles({name:'single.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:singleWorkbook});
+  await expect(page.locator('#languageEncodingPreview')).toContainText('ja-JP：1 条');
+  await expect(page.locator('#languageEncoding')).toBeHidden();
   await page.getByRole('button',{name:'检查并预览导入'}).click();
   await expect(page.locator('#dialogTitle')).toContainText('多语言导入预览');
   await page.getByRole('button',{name:'应用到商品表单'}).click();
@@ -446,4 +449,21 @@ test('update dialog distinguishes source mode and preserves draft when installer
   expect(requested.version).toBe('0.2.0');await expect(page.locator('#dialogBody')).toContainText('SHA256 校验失败');
   expect(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.startsWith('gp-workspace-v1:')))).toBeTruthy();
   await page.locator('#closeModal').click();await expect(page.locator('#refresh')).toBeEnabled();
+});
+
+test('Excel multilingual sheets preview Unicode and errors by sheet before applying',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');await page.locator('[data-select="coins_100"]').check();await page.locator('#languages').click();
+  const W=require('../listings-workbook'),X=require('../vendor/xlsx.full.min.js');
+  const bytes=W.exportWorkbook([{productId:'coins_100',listings:[{languageCode:'zh-TW',title:'金幣',description:'繁體內容'},{languageCode:'ja-JP',title:'コイン',description:'日本語の説明'}]}],['ko-KR']);
+  await page.locator('#languageFile').setInputFiles({name:'translations.xlsx',mimeType:W.MIME,buffer:bytes});
+  await expect(page.locator('#languageEncodingPreview')).toContainText('ko-KR：0 条，跳过空白 1 行');
+  await expect(page.locator('#languageEncodingPreview')).toContainText('繁體內容');
+  await page.getByRole('button',{name:'检查并预览导入'}).click();
+  await expect(page.locator('#dialogBody')).toContainText('日本語の説明');
+  await page.getByRole('button',{name:'应用到草稿',exact:true}).click();
+  await page.locator('#languages').click();
+  const wb=X.read(bytes,{type:'buffer'});wb.Sheets['ja-JP'].C2={t:'s',v:''};
+  await page.locator('#languageFile').setInputFiles({name:'incomplete.xlsx',mimeType:W.MIME,buffer:Buffer.from(X.write(wb,{type:'buffer',bookType:'xlsx',compression:true}))});
+  await page.getByRole('button',{name:'检查并预览导入'}).click();
+  await expect(page.locator('#modalError')).toContainText('页签 ja-JP 第 2 行');
 });
