@@ -588,3 +588,15 @@ test('new draft discard preserves other drafts and rolls back when storage fails
   await page.locator('#refresh').click();await page.getByRole('button',{name:'放弃草稿并重新读取',exact:true}).click();await expect(page.locator('#pendingBadge')).toHaveText('0');
   await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('[data-select="keep_copy"]')).toHaveCount(0);await expect(page.locator('#pendingBadge')).toHaveText('0');
 });
+
+test('checking submission confirmation clears its stale error without sending automatically',async({page})=>{
+  let commits=0;
+  await page.route('**/api/commit',route=>{commits++;return route.fulfill({status:400,json:{error:'模拟远端错误：请重新预览'}});});
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('7.65');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await page.locator('#preview').click();await expect(page.locator('#dialogTitle')).toContainText('提交前预览');
+  await page.getByRole('button',{name:'提交演示变更',exact:true}).click();await expect(page.locator('#modalError')).toContainText('请先核对并勾选变更确认');expect(commits).toBe(0);
+  await page.locator('#confirmWrite').check();await expect(page.locator('#modalError')).toHaveCount(0);await expect(page.locator('#status')).not.toContainText('请先核对并勾选变更确认');expect(commits).toBe(0);
+  await page.getByRole('button',{name:'提交演示变更',exact:true}).click();await expect(page.locator('#modalError')).toContainText('模拟远端错误');expect(commits).toBe(1);
+  await page.locator('#confirmWrite').uncheck();await page.locator('#confirmWrite').check();await expect(page.locator('#modalError')).toContainText('模拟远端错误');expect(commits).toBe(1);
+});

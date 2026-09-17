@@ -72,7 +72,7 @@ function showError(message){
   status(message,true);
   if(!$('modal').open){modal('操作未完成','<div class="error-box" role="alert">'+errorDetails(message)+'</div>',[{label:'关闭',run:close}]);return;}
   let box=$('modalError');if(!box){box=document.createElement('div');box.id='modalError';box.className='error-box';box.setAttribute('role','alert');$('dialogBody').append(box);}
-  box.innerHTML=errorDetails(message);box.scrollIntoView({block:'nearest'});
+  box.dataset.message=message;box.innerHTML=errorDetails(message);box.scrollIntoView({block:'nearest'});
 }
 async function job(fn,message){working=true;status(message||'处理中…');const buttons=[...document.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);$('mode').disabled=true;$('project').disabled=true;
   try{return await fn();}finally{working=false;buttons.forEach(b=>b.disabled=false);$('mode').disabled=false;renderHeader();}}
@@ -427,6 +427,12 @@ async function preview(activationChosen=false){
       modal('提交结果',result.results.map(r=>'<div class="result-row"><b>'+esc(r.productId)+' <span class="pill '+(r.status==='verified'?'green':'orange')+'">'+esc({verified:'已核对',pending:'等待核对',uncertain:'状态不确定',failed:'未写入'}[r.status])+'</span></b><p>'+esc(r.message)+'</p>'+resultSteps(r)+'</div>').join('')+'<p class="help">本机操作记录：'+esc(result.logFile)+'。失败或待核对商品的草稿已保留。结果不确定时，请先在后台核对，避免直接重复提交。</p>',[...(result.results.some(r=>r.status!=='verified')?[{label:'核对未完成项',run:()=>recoverResult(result.logFile)}]:[]),{label:'关闭',class:'primary',run:close}]);
       status('处理完成：'+result.results.filter(r=>r.status==='verified').length+'/'+result.results.length+' 个商品已读回核对');
     }}]);
+  $('confirmWrite').onchange=()=>{
+    if(!$('confirmWrite').checked)return;
+    const message='请先核对并勾选变更确认';
+    if($('modalError')?.dataset.message===message)$('modalError').remove();
+    if($('status').textContent===message)status('已确认变更，可点击提交');
+  };
 }
 function discard(){
   const products=picked();modal('撤销所选草稿','<p>撤销 '+products.length+' 个商品的本地修改，未提交的新商品将从草稿中移除。</p>',[{label:'取消',run:close},{label:'撤销草稿',run:()=>{
