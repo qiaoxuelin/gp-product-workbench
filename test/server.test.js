@@ -189,11 +189,14 @@ test('HTTP integration: demo lifecycle, CSRF, multi-project isolation, live adap
     review=await call('monitor/check',{mode:'live',profileId:a.activeId});assert.equal(review.events.length,1);
     assert.equal(requests[0][0],'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/com.test.a/tracks/production/releases');
     assert(requests.every(r=>r[1]==='GET'));assert.equal(requests[0][2],'replacement@example.iam.gserviceaccount.com');
-    await call('config/switch',{id:b.activeId});
     await call('monitor/check',{mode:'live',profileId:b.activeId});
     assert.equal(requests.at(-1)[0],'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/com.test.b/tracks/production/releases');
     assert.equal(requests.at(-1)[2],'test@example.iam.gserviceaccount.com');
-    await call('monitor/status',{mode:'live',profileId:a.activeId},400);
+    await call('monitor/status',{mode:'live',profileId:a.activeId});
+    assert.equal((await call('config')).activeId,a.activeId);
+    await call('monitor/status',{mode:'live',profileId:'missing'},400);
+    await call('products',{mode:'live',profileId:b.activeId},400);
+    const notify=await call('monitor/feishu/status',{mode:'live',profileId:b.activeId});assert.equal(notify.enabled,false);
     await call('monitor/check',{mode:'demo'},400);
   }
 

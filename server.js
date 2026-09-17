@@ -216,19 +216,20 @@ async function route(url,b) {
   if(url==='/api/update/check')return updater.check();
   if(url==='/api/update/status')return updater.status();
   if(url==='/api/update/start')return updater.begin(b.version);
-  if(b.mode==='live'&&!url.startsWith('/api/config')&&b.profileId!==config.id)throw Error('当前项目已切换，请重新选择项目并读取商品');
   if(url==='/api/monitor/summary')return {projects:monitor.summary()};
   if(url.startsWith('/api/monitor/')){
-    if(b.mode!=='live'||!config.id)throw Error('审核监控需要切换到已配置授权的真实项目');
-    if(url==='/api/monitor/feishu/status')return notifications.status(config);
-    if(url==='/api/monitor/feishu/config')return notifications.configure(config,b);
-    if(url==='/api/monitor/feishu/test')return notifications.test(config);
-    if(url==='/api/monitor/feishu/retry')return notifications.retry(config,b.id);
-    if(url==='/api/monitor/status')return monitor.status(config.id);
-    if(url==='/api/monitor/config')return monitor.configure(config.id,b);
-    if(url==='/api/monitor/check')return checkReview(config.id);
-    if(url==='/api/monitor/acknowledge')return monitor.acknowledge(config.id);
+    const profile=settings.profiles.find(p=>p.id===b.profileId);
+    if(b.mode!=='live'||!profile)throw Error('请选择有效的审核监控项目');
+    if(url==='/api/monitor/feishu/status')return notifications.status(profile);
+    if(url==='/api/monitor/feishu/config')return notifications.configure(profile,b);
+    if(url==='/api/monitor/feishu/test')return notifications.test(profile);
+    if(url==='/api/monitor/feishu/retry')return notifications.retry(profile,b.id);
+    if(url==='/api/monitor/status')return monitor.status(profile.id);
+    if(url==='/api/monitor/config')return monitor.configure(profile.id,b);
+    if(url==='/api/monitor/check')return checkReview(profile.id);
+    if(url==='/api/monitor/acknowledge')return monitor.acknowledge(profile.id);
   }
+  if(b.mode==='live'&&!url.startsWith('/api/config')&&b.profileId!==config.id)throw Error('当前项目已切换，请重新选择项目并读取商品');
   if(url.startsWith('/api/finance/')){
     if(b.mode!=='live')throw Error('账单导出需要真实项目及 Google 财务权限，演示模式不提供真实账单');
     if(!config.id)throw Error('请先配置项目');

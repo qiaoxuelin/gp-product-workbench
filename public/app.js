@@ -12,7 +12,7 @@ function syncActions(){for(const id of ['copy','price','activate','deactivate','
 function status(message,error=false){$('status').textContent=message;$('status').className=error?'error':'';}
 async function api(url,body={},binary=false){
   // Freeze the target and payload across a retry; only a request rejected before routing is retried.
-  const payload=JSON.stringify({...body,...(body.mode==='live'?{profileId:settings.activeId}:{})});
+  const payload=JSON.stringify({...body,...(body.mode==='live'?{profileId:body.profileId??settings.activeId}:{})});
   for(let attempt=0;attempt<2;attempt++){
     const r=await fetch('/api/'+url,{method:'POST',headers:{'Content-Type':'application/json','X-GP-Token':token},body:payload});
     if(binary&&r.ok)return {blob:await r.blob(),sha256:r.headers.get('X-File-SHA256')};
@@ -110,7 +110,7 @@ function render(){
   $('selectionHint').textContent=selected.size?'已选择 '+selected.size+' 个商品':'选择商品后执行批量操作';
   $('products').innerHTML=list.map(p=>{
     const o=p.purchaseOptions[0],price=o?.regionalPricingAndAvailabilityConfigs||[],allStates=[...new Set(p.purchaseOptions.map(x=>states[p.productId]?.[x.purchaseOptionId]||x.state||'DRAFT'))],s=allStates.length===1?allStates[0]:'MIXED';
-    return '<tr class="'+(selected.has(p.productId)?'selected':'')+'"><td><input type="checkbox" aria-label="选择 '+esc(p.productId)+'" data-select="'+esc(p.productId)+'" '+(selected.has(p.productId)?'checked':'')+'></td><td><strong>'+esc(p.listings[0]?.title||p.productId)+'</strong><small>'+esc(p.productId)+'</small></td><td><span class="pill">'+p.purchaseOptions.length+' 个选项</span><small>'+esc(o?.purchaseOptionId||'')+' · '+p.listings.length+' 种语言</small></td><td>'+price.slice(0,2).map(r=>'<div class="price-line"><span>'+esc(r.regionCode)+'</span>'+esc(r.price?.currencyCode)+' '+esc(decimal(r.price))+'</div>').join('')+(price.length>2?'<small>共 '+price.length+' 个地区</small>':'')+'</td><td><span class="pill '+(s==='ACTIVE'?'green':'')+'">'+esc((Object.values(states[p.productId]||{}).length?'待提交 · ':'')+({ACTIVE:'已启用',DRAFT:'草稿',INACTIVE:'已停用',INACTIVE_PUBLISHED:'已停用 · 兼容',MIXED:'多种状态'}[s]||s))+'</span></td><td>'+(dirty(p)?'<span class="pill orange">'+(old(p.productId)?'待更新':'待创建')+'</span>':'<span class="pill">已同步</span>')+'</td><td><button data-edit="'+esc(p.productId)+'">编辑</button></td></tr>';
+    return '<tr class="'+(selected.has(p.productId)?'selected':'')+'"><td><input type="checkbox" aria-label="选择 '+esc(p.productId)+'" data-select="'+esc(p.productId)+'" '+(selected.has(p.productId)?'checked':'')+'></td><td><strong>'+esc(p.listings[0]?.title||p.productId)+'</strong><small>'+esc(p.productId)+'</small></td><td><span class="pill">'+p.purchaseOptions.length+' 个选项</span><small>'+esc(o?.purchaseOptionId||'')+' · '+p.listings.length+' 种语言</small></td><td>'+price.slice(0,2).map(r=>'<div class="price-line"><span>'+esc(r.regionCode)+'</span>'+esc(r.price?.currencyCode)+' '+esc(decimal(r.price))+'</div>').join('')+(price.length>2?'<small>共 '+price.length+' 个地区</small>':'')+'</td><td><span class="pill '+(s==='ACTIVE'?'green':'')+'">'+esc((Object.values(states[p.productId]||{}).length?'待提交 · ':'')+({ACTIVE:'已启用',DRAFT:'草稿',INACTIVE:'已停用',INACTIVE_PUBLISHED:'已停用 · 兼容',MIXED:'多种状态'}[s]||s))+'</span></td><td>'+(dirty(p)?'<span class="pill orange">'+(old(p.productId)?'待更新':'待创建')+'</span>':'<span class="pill" title="本地与上次读取的配置一致，不表示刚刚向 Google 提交了修改">无待提交修改</span>')+'</td><td><button data-edit="'+esc(p.productId)+'">编辑</button></td></tr>';
   }).join('');
   $('empty').hidden=list.length>0;
   $('empty').innerHTML=draft.length?'<div class="empty-symbol">⌕</div><h2>没有匹配的商品</h2><p>试试其他名称、商品 ID，或清除当前筛选。</p>':'<div class="empty-symbol">＋</div><h2>从读取商品开始</h2><p>连接应用后读取商品，或创建第一个商品草稿。</p>';
@@ -492,9 +492,13 @@ const reviewLabels={DRAFT:'草稿',NOT_SENT_FOR_REVIEW:'待送审',IN_REVIEW:'�
 const reviewLabel=state=>reviewLabels[String(state).replace(/^RELEASE_LIFECYCLE_STATE_/,'')]||'未知状态（'+state+'）';
 const reviewTime=value=>value?new Date(value).toLocaleString():'尚未检查';
 
-async function feishuDialog(){
-  const state=await job(()=>api('monitor/feishu/status',{mode}),'正在读取飞书通知配置…');
-  modal('飞书群通知 · '+settings.current.name,'<p>为当前项目配置群机器人。启用后仅发送新检测到的状态变化；首次审核查询建立基线，不补发历史状态。</p><div class="form-grid">'+
+const REVIEW_PROJECT_KEY='gp-review-project-v1';
+let reviewProjectId='';
+async function feishuDialog(profileId=reviewProjectId){
+  const profile=settings.profiles.find(p=>p.id===profileId);
+  if(!profile)throw Error('审核监控项目不存在，请重新选择');
+  const state=await job(()=>api('monitor/feishu/status',{mode:'live',profileId}),'正在读取飞书通知配置…');
+  modal('飞书群通知 · '+profile.name,'<p>为当前项目配置群机器人。启用后仅发送新检测到的状态变化；首次审核查询建立基线，不补发历史状态。</p><div class="form-grid">'+
     '<label class="checkline wide"><input type="checkbox" id="feishuEnabled" '+(state.enabled?'checked':'')+'>启用飞书自动通知</label>'+
     '<label class="field wide">机器人 Webhook<input id="feishuWebhook" type="password" autocomplete="new-password" placeholder="'+(state.hasWebhook?'已加密保存，留空保留；填写新地址可替换':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label>'+
     '<label class="field wide">签名校验密钥（可选）<input id="feishuSecret" type="password" autocomplete="new-password" placeholder="'+(state.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label>'+
@@ -503,33 +507,40 @@ async function feishuDialog(){
     '<p class="help">本机加密保存 Webhook 和密钥，不回显。启用通知也需要在上一页启用审核监控，并保持本机后台服务运行。</p>'+
     '<details><summary>如何准备飞书机器人？</summary><ol><li>在接收通知的飞书群中打开“设置 → 群机器人 → 添加机器人 → 自定义机器人”。</li><li>复制 Webhook 到上方；若开启签名校验，一并填写签名密钥。</li><li>若使用关键词限制，添加关键词 PlayBatch。若使用 IP 白名单，需允许本机网络的出口 IP。</li><li>保存后点击测试通知，在群里确认收到。</li></ol><p><a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot" target="_blank" rel="noreferrer">飞书官方配置指南 ↗</a></p></details>'+
     '<div class="finance-actions"><button id="feishuSave">保存通知设置</button><button id="feishuTest">发送测试通知到群</button></div><div id="feishuResults"></div>',
-    [{label:'返回审核监控',run:reviewMonitorDialog},{label:'关闭',run:close}]);
+    [{label:'返回审核监控',run:()=>reviewMonitorDialog(profileId)},{label:'关闭',run:close}]);
   const draw=s=>{
     const names={pending:'待发送',sending:'发送中',sent:'已发送',failed:'发送失败',uncertain:'结果不明'};
     $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+esc(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
-    s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+esc(d.text)+'</pre>',[{label:'返回',run:feishuDialog},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode,id:d.id}),'正在重试发送…');await feishuDialog();}}]));});
+    s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+esc(d.text)+'</pre>',[{label:'返回',run:()=>feishuDialog(profileId)},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode:'live',profileId,id:d.id}),'正在重试发送…');await feishuDialog(profileId);}}]));});
   };
   draw(state);
   bind('feishuSave',async()=>{
     const states=[];if($('feishuApproved').checked)states.push('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED');if($('feishuPublished').checked)states.push('RELEASE_LIFECYCLE_STATE_PUBLISHED');
-    const payload={mode,enabled:$('feishuEnabled').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
+    const payload={mode:'live',profileId,enabled:$('feishuEnabled').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
     const result=await job(()=>api('monitor/feishu/config',payload),'正在加密保存通知设置…');
     $('feishuWebhook').value='';$('feishuSecret').value='';$('feishuClearSecret').checked=false;
     $('feishuWebhook').placeholder=result.hasWebhook?'已加密保存，留空保留':'请输入 Webhook';$('feishuSecret').placeholder=result.hasSecret?'已保存，留空保留':'可选签名密钥';draw(result);status('飞书通知设置已保存');
   });
-  bind('feishuTest',async()=>{const result=await job(()=>api('monitor/feishu/test',{mode}),'正在向已保存的飞书群发送测试通知…');draw(result);status(result.deliveries[0]?.status==='sent'?'测试通知已发送，请查看飞书群':'测试未确认成功，请查看发送记录',result.deliveries[0]?.status!=='sent');});
+  bind('feishuTest',async()=>{const result=await job(()=>api('monitor/feishu/test',{mode:'live',profileId}),'正在向已保存的飞书群发送测试通知…');draw(result);status(result.deliveries[0]?.status==='sent'?'测试通知已发送，请查看飞书群':'测试未确认成功，请查看发送记录',result.deliveries[0]?.status!=='sent');});
 }
 
-async function reviewMonitorDialog(){
-  if(mode!=='live'){modal('应用审核监控','<p>请先切换到真实项目并保存服务账号授权，再查看应用版本的审核与发布状态。</p>',[{label:'关闭',run:close}]);return;}
-  const state=await job(()=>api('monitor/status',{mode}),'正在读取审核监控配置…');
+async function reviewMonitorDialog(requestedId){
+  let remembered=reviewProjectId;try{remembered=remembered||localStorage.getItem(REVIEW_PROJECT_KEY);}catch{}
+  const profile=settings.profiles.find(p=>p.id===(requestedId||remembered))||settings.profiles[0];
+  if(!profile){modal('应用审核监控','<p>暂无项目，请先通过“新增项目”配置包名和服务账号。</p>',[{label:'关闭',run:close}]);return;}
+  const profileId=profile.id;
+  const state=await job(()=>api('monitor/status',{mode:'live',profileId}),'正在读取审核监控配置…');
+  reviewProjectId=profileId;try{localStorage.setItem(REVIEW_PROJECT_KEY,profileId);}catch{}
   const choices=[...new Set(['production','internal','alpha','beta',...state.tracks])];
-  modal('应用审核监控 · '+settings.current.name,'<p>监控应用版本：审核中、通过待发布、审核未通过、已发布。首次检查建立基线，后续变化会记录并显示在侧栏。</p><p class="help">本机后台服务运行时持续检查，关闭浏览器也会检查；停止工具或电脑休眠期间暂停。这里不会自动提交审核或发布版本。</p>'+
+  modal('应用审核监控 · '+profile.name,'<label class="field">监控项目<select id="reviewProject">'+settings.profiles.map(p=>'<option value="'+esc(p.id)+'" '+(p.id===profileId?'selected':'')+'>'+esc(p.name+' · '+p.packageName)+'</option>').join('')+'</select></label><p class="help">审核监控独立选择项目，不影响商品页及其草稿。</p><p>监控应用版本：审核中、通过待发布、审核未通过、已发布。首次检查建立基线，后续变化会记录并显示在侧栏。</p><p class="help">本机后台服务运行时持续检查，关闭浏览器也会检查；停止工具或电脑休眠期间暂停。这里不会自动提交审核或发布版本。</p>'+
     '<div class="form-grid"><label class="checkline wide"><input id="reviewEnabled" type="checkbox" '+(state.enabled?'checked':'')+'>启用此项目的后台监控</label><label class="field">检查间隔<select id="reviewInterval">'+[5,15,30,60].map(n=>'<option value="'+n+'" '+(state.intervalMinutes===n?'selected':'')+'>'+n+' 分钟</option>').join('')+'</select></label>'+multiMarkup('reviewTracks','发布轨道')+
     '<details class="wide"><summary>自定义封闭测试轨道</summary><p class="help">如使用自定义轨道，填写 Play Console 中的轨道 ID 并添加。</p><input id="reviewCustomTrack" aria-label="自定义轨道 ID"><button id="reviewAddTrack">添加轨道</button></details></div>'+
     '<div class="finance-actions"><button id="reviewSave">保存监控设置</button><button id="reviewCheck" class="primary">保存并立即检查</button><button id="reviewRead">标记已读</button><button id="reviewFeishu">飞书通知</button></div><div id="reviewResults"></div><p class="help">“已发布”不等于全量发布，也可能是分阶段或暂停后可恢复的版本。无返回结果或版本从列表消失不代表被拒绝。</p><p><a href="https://play.google.com/console" target="_blank" rel="noreferrer">打开 Play Console ↗</a></p>',
     [{label:'关闭',run:close}]);
   initMulti('reviewTracks',choices,state.tracks,null);
+  const readForm=()=>JSON.stringify([$('reviewEnabled').checked,$('reviewInterval').value,$('reviewTracks').selectedValues()]);
+  let savedForm=readForm();
+  $('reviewProject').onchange=async e=>{const next=e.target.value;e.target.value=profileId;if(working)return;if(readForm()!==savedForm&&!confirm('监控设置尚未保存，切换项目会放弃这些修改。继续吗？'))return;try{await reviewMonitorDialog(next);}catch(error){showError(error.message);}};
   const draw=result=>{
     $('reviewResults').innerHTML='<p>上次成功检查：'+esc(reviewTime(result.lastCheck))+' · 后台监控：'+(result.enabled?'已开启':'已关闭')+'</p>'+
       (result.error?'<p class="error-box">本次检查失败：'+esc(result.error)+'<br>下方保留上次成功结果。</p>':'')+
@@ -540,11 +551,11 @@ async function reviewMonitorDialog(){
   };
   draw(state);
   bind('reviewAddTrack',()=>{const value=$('reviewCustomTrack').value.trim();if(!value||value.length>100||/[\/\\\x00-\x1f]/.test(value))throw Error('请输入有效的轨道 ID');const selected=$('reviewTracks').selectedValues();if(!choices.includes(value))choices.push(value);initMulti('reviewTracks',choices,[...selected,value],null);$('reviewCustomTrack').value='';});
-  const saveReview=()=>api('monitor/config',{mode,enabled:$('reviewEnabled').checked,intervalMinutes:Number($('reviewInterval').value),tracks:$('reviewTracks').selectedValues()});
+  const saveReview=async()=>{const result=await api('monitor/config',{mode:'live',profileId,enabled:$('reviewEnabled').checked,intervalMinutes:Number($('reviewInterval').value),tracks:$('reviewTracks').selectedValues()});savedForm=readForm();return result;};
   bind('reviewSave',async()=>{const result=await job(saveReview,'正在保存监控设置…');draw(result);status(result.enabled?'后台审核监控已开启':'后台审核监控已关闭');});
-  bind('reviewCheck',async()=>{const result=await job(async()=>{await saveReview();return api('monitor/check',{mode});},'正在查询 Google 审核与发布状态…');draw(result);status(result.error?'检查未成功，详情见窗口':'审核状态已更新',!!result.error);await refreshReviewBadge();});
-  bind('reviewFeishu',feishuDialog);
-  bind('reviewRead',async()=>{draw(await api('monitor/acknowledge',{mode}));await refreshReviewBadge();});
+  bind('reviewCheck',async()=>{const result=await job(async()=>{await saveReview();return api('monitor/check',{mode:'live',profileId});},'正在查询 Google 审核与发布状态…');draw(result);status(result.error?'检查未成功，详情见窗口':'审核状态已更新',!!result.error);await refreshReviewBadge();});
+  bind('reviewFeishu',()=>feishuDialog(profileId));
+  bind('reviewRead',async()=>{draw(await api('monitor/acknowledge',{mode:'live',profileId}));await refreshReviewBadge();});
 }
 async function refreshReviewBadge(){
   if(working)return;

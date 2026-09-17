@@ -494,7 +494,7 @@ test('selected draft discard updates badge and stays discarded after reload',asy
   await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('9.99');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await page.locator('[data-select="coins_100"]').check();await page.locator('#discard').click();await page.getByRole('button',{name:'撤销草稿',exact:true}).click();
-  await expect(page.locator('#pendingBadge')).toHaveText('0');await expect(page.locator('tr').filter({has:page.locator('[data-select="coins_100"]')})).toContainText('已同步');
+  await expect(page.locator('#pendingBadge')).toHaveText('0');await expect(page.locator('tr').filter({has:page.locator('[data-select="coins_100"]')})).toContainText('无待提交修改');
   await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('#pendingBadge')).toHaveText('0');
 });
 test('review monitor config shows approval separate from publication and retains last successful result on error',async({page})=>{
@@ -527,4 +527,30 @@ test('Feishu notification settings hide secrets and only send a test on explicit
   await page.locator('#feishuEnabled').check();await page.locator('#feishuWebhook').fill('https://open.feishu.cn/open-apis/bot/v2/hook/11111111-2222-3333-4444-555555555555');
   await page.locator('#feishuSave').click();await expect(page.locator('#feishuWebhook')).toHaveValue('');expect(tests).toBe(0);expect(payload.profileId).toBe('notify');
   await page.locator('#feishuTest').click();await expect(page.locator('#feishuResults')).toContainText('已发送');expect(tests).toBe(1);
+});
+
+test('review project selection is independent, persisted and used by Feishu',async({page})=>{
+  const a={id:'a',name:'Product A',packageName:'com.example.a'},b={id:'b',name:'Review B',packageName:'com.example.b'};
+  const requests=[];
+  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[a,b],activeId:'a',current:a}}));
+  await page.route('**/api/monitor/**',route=>{
+    const body=route.request().postDataJSON();requests.push({url:route.request().url(),...body});
+    const json=route.request().url().endsWith('/summary')?{projects:[]}:route.request().url().includes('/feishu/')?{enabled:false,states:[],deliveries:[]}:{enabled:false,tracks:['production'],intervalMinutes:5,snapshot:[],events:[]};
+    return route.fulfill({json});
+  });
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('9.99');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await expect(page.locator('#pendingBadge')).toHaveText('1');
+  await page.locator('#reviewMonitor').click();await expect(page.locator('#reviewProject')).toHaveValue('a');
+  await page.locator('#reviewProject').selectOption('b');await expect(page.locator('#modal')).toContainText('应用审核监控 · Review B');
+  await page.locator('#reviewEnabled').check();
+  page.once('dialog',dialog=>dialog.dismiss());
+  await page.locator('#reviewProject').selectOption('a');await expect(page.locator('#reviewProject')).toHaveValue('b');await expect(page.locator('#reviewEnabled')).toBeChecked();
+  await page.locator('#reviewSave').click();await expect(page.locator('#status')).toContainText('监控已关闭');
+  expect(requests.find(r=>r.url.endsWith('/config')).profileId).toBe('b');
+  await page.locator('#reviewFeishu').click();await expect(page.locator('#modal')).toContainText('飞书群通知 · Review B');
+  expect(requests.find(r=>r.url.endsWith('/feishu/status')).profileId).toBe('b');
+  await page.locator('#closeModal').click();await expect(page.locator('#mode')).toHaveValue('demo');await expect(page.locator('#project')).toHaveValue('a');await expect(page.locator('#pendingBadge')).toHaveText('1');
+  await page.reload();await page.locator('#reviewMonitor').click();await expect(page.locator('#reviewProject')).toHaveValue('b');
+  expect(requests.filter(r=>!r.url.endsWith('/summary')).every(r=>r.mode==='live')).toBeTruthy();
 });
