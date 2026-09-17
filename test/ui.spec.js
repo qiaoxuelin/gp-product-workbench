@@ -554,3 +554,37 @@ test('review project selection is independent, persisted and used by Feishu',asy
   await page.reload();await page.locator('#reviewMonitor').click();await expect(page.locator('#reviewProject')).toHaveValue('b');
   expect(requests.filter(r=>!r.url.endsWith('/summary')).every(r=>r.mode==='live')).toBeTruthy();
 });
+
+for(const previewFirst of [false,true])test('new draft discard removes product and survives reload '+(previewFirst?'after activation preview':'before preview'),async({page})=>{
+  let commits=0;page.on('request',r=>{if(r.url().endsWith('/api/commit'))commits++;});
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  const total=Number(await page.locator('#total').textContent());
+  await page.locator('#create').click();await page.locator('#editId').fill('discard_new');
+  await page.getByLabel('商品名称',{exact:true}).fill('New draft');await page.getByLabel('商品描述',{exact:true}).fill('Discard test');
+  await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await expect(page.locator('#pendingBadge')).toHaveText('1');
+  if(previewFirst){await page.locator('#preview').click();await page.getByRole('button',{name:'创建并启用',exact:true}).click();await expect(page.locator('#dialogTitle')).toContainText('提交前预览');await page.locator('#closeModal').click();}
+  await page.locator('#discard').click();await page.getByRole('button',{name:'取消',exact:true}).click();await expect(page.locator('[data-select="discard_new"]')).toHaveCount(1);
+  await page.locator('#discard').click();await page.getByRole('button',{name:'撤销草稿',exact:true}).click();
+  await expect(page.locator('[data-select="discard_new"]')).toHaveCount(0);await expect(page.locator('#pendingBadge')).toHaveText('0');await expect(page.locator('#total')).toHaveText(String(total));
+  expect(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('gp-workspace-v1:')).length)).toBe(0);
+  await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('[data-select="discard_new"]')).toHaveCount(0);await expect(page.locator('#pendingBadge')).toHaveText('0');expect(commits).toBe(0);
+});
+
+test('new draft discard preserves other drafts and rolls back when storage fails',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('8.76');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await page.locator('#copy').click();await page.locator('#copyIds').fill('discard_copy\nkeep_copy');await page.getByRole('button',{name:'生成商品草稿'}).click();
+  await page.locator('#clearSelection').click();await page.locator('[data-select="discard_copy"]').check();await expect(page.locator('#pendingBadge')).toHaveText('3');
+  const before=await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('gp-workspace-v1:')).map(k=>[k,localStorage[k]])));
+  await page.evaluate(()=>{window.savedSetItem=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('gp-workspace-v1:'))throw new DOMException('quota','QuotaExceededError');return window.savedSetItem.call(this,k,v);};});
+  await page.locator('#discard').click();await page.getByRole('button',{name:'撤销草稿',exact:true}).click();
+  await expect(page.locator('#dialogBody')).toContainText('无法保存撤销结果');await expect(page.locator('[data-select="discard_copy"]')).toHaveCount(1);
+  expect(await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('gp-workspace-v1:')).map(k=>[k,localStorage[k]])))).toEqual(before);
+  await page.evaluate(()=>Storage.prototype.setItem=window.savedSetItem);
+  await page.getByRole('button',{name:'撤销草稿',exact:true}).click();await expect(page.locator('#pendingBadge')).toHaveText('2');
+  await page.reload();await expect(page.locator('[data-select="discard_copy"]')).toHaveCount(0);await expect(page.locator('[data-select="keep_copy"]')).toHaveCount(1);await expect(page.locator('#pendingBadge')).toHaveText('2');
+  await page.locator('[data-edit="coins_100"]').click();await expect(page.locator('[data-k="price"]').first()).toHaveValue('8.76');await page.locator('#closeModal').click();
+  await page.locator('#refresh').click();await page.getByRole('button',{name:'放弃草稿并重新读取',exact:true}).click();await expect(page.locator('#pendingBadge')).toHaveText('0');
+  await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('[data-select="keep_copy"]')).toHaveCount(0);await expect(page.locator('#pendingBadge')).toHaveText('0');
+});
