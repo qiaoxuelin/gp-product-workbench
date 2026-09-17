@@ -549,6 +549,7 @@ async function reviewMonitorDialog(requestedId){
   $('reviewProject').onchange=async e=>{const next=e.target.value;e.target.value=profileId;if(working)return;if(readForm()!==savedForm&&!confirm('监控设置尚未保存，切换项目会放弃这些修改。继续吗？'))return;try{await reviewMonitorDialog(next);}catch(error){showError(error.message);}};
   const draw=result=>{
     $('reviewResults').innerHTML='<p>上次成功检查：'+esc(reviewTime(result.lastCheck))+' · 后台监控：'+(result.enabled?'已开启':'已关闭')+'</p>'+
+      (result.quotaUntil>Date.now()?'<p class="warning">配额冷却中，下次允许查询：'+esc(reviewTime(result.quotaUntil))+'。冷却期间点击检查不会再次请求 Google；这是工具的重试时间，不保证 Google 配额届时恢复。</p>':'')+
       (result.error?'<p class="error-box">本次检查失败：'+esc(result.error)+'<br>下方保留上次成功结果。</p>':'')+
       '<div class="finance-table"><table><thead><tr><th>轨道 / 版本</th><th>版本号</th><th>状态</th></tr></thead><tbody>'+result.snapshot.map(r=>'<tr><td>'+esc(r.track+' / '+r.name)+'</td><td>'+esc(r.versionCodes.join(', '))+'</td><td>'+esc(reviewLabel(r.state))+'</td></tr>').join('')+'</tbody></table></div>'+
       (!result.snapshot.length?'<p class="help">'+(result.lastCheck?'所选轨道未返回当前版本；不代表审核通过或拒绝。':'尚未读取 Google，请点击立即检查。')+'</p>':'')+

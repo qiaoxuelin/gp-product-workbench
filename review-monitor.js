@@ -12,7 +12,7 @@ function createMonitor({file,profiles,listReleases,now=()=>Date.now()}){
     if(!Array.isArray(input.tracks)||!input.tracks.length||input.tracks.length>8||input.tracks.some(t=>typeof t!=='string'||!t.trim()||t.length>100||/[\x00-\x1f/\\]/.test(t)))throw Error('请选择 1–8 个有效发布轨道');
     const old=get(id),tracks=[...new Set(input.tracks.map(t=>t.trim()))];
     const scopeChanged=JSON.stringify(tracks)!==JSON.stringify(old.tracks);
-    data[id]={...old,enabled:input.enabled,tracks,intervalMinutes:input.intervalMinutes,nextCheck:0,error:'',...(scopeChanged?{snapshot:[],lastCheck:null,events:[],unread:0}:{})};
+    data[id]={...old,enabled:input.enabled,tracks,intervalMinutes:input.intervalMinutes,nextCheck:old.quotaUntil>now()?old.quotaUntil:0,error:old.quotaUntil>now()?old.error:'',...(scopeChanged?{snapshot:[],lastCheck:null,events:[],unread:0}:{})};
     write();return get(id);
   }
   function status(id){return structuredClone(get(id));}
@@ -21,7 +21,8 @@ function createMonitor({file,profiles,listReleases,now=()=>Date.now()}){
   function check(id){if(checking.has(id))return checking.get(id);const pending=checkOnce(id).finally(()=>checking.delete(id));checking.set(id,pending);return pending;}
   async function checkOnce(id){
     const profile=profiles().find(p=>p.id===id);if(!profile)throw Error('项目不存在');
-    const original=get(id),stamp=new Date(now()).toISOString(),snapshot=[];
+    const original=get(id);if(original.quotaUntil>now())return status(id);
+    const stamp=new Date(now()).toISOString(),snapshot=[];
     try{
       for(const track of original.tracks){
         const result=await listReleases(profile,track);
@@ -34,9 +35,13 @@ function createMonitor({file,profiles,listReleases,now=()=>Date.now()}){
       const current=get(id);if(JSON.stringify(current.tracks)!==JSON.stringify(original.tracks)||current.packageName!==profile.packageName)return status(id);
       const prior=new Map(original.snapshot.map(r=>[r.key,r]));
       const events=original.lastCheck?snapshot.filter(r=>prior.get(r.key)?.state!==r.state).map(r=>({id:crypto.randomUUID(),at:stamp,track:r.track,name:r.name,versionCodes:r.versionCodes,before:prior.get(r.key)?.state||null,after:r.state})):[];
-      data[id]={...current,snapshot,events:events.concat(current.events).slice(0,100),unread:Math.min(100,current.unread+events.length),lastCheck:stamp,lastAttempt:stamp,nextCheck:now()+current.intervalMinutes*60000,error:''};
+      data[id]={...current,snapshot,events:events.concat(current.events).slice(0,100),unread:Math.min(100,current.unread+events.length),lastCheck:stamp,lastAttempt:stamp,nextCheck:now()+current.intervalMinutes*60000,quotaUntil:0,quotaFailures:0,error:''};
     }catch(e){
-      const current=get(id);data[id]={...current,lastAttempt:stamp,nextCheck:now()+current.intervalMinutes*60000,error:e.message+(e.status===403?'；请在 Play Console 为该服务账号补充目标应用的版本查看权限，并确认包名正确。':'')};
+      const current=get(id),quota=e.status===429||/quota|rate.?limit|resource.?exhausted|too many requests/i.test(e.message);
+      const failures=quota?(current.quotaFailures||0)+1:0;
+      const delay=quota?Math.max(current.intervalMinutes,Math.min(60,15*2**Math.min(failures-1,2)))*60000:current.intervalMinutes*60000;
+      data[id]={...current,lastAttempt:stamp,nextCheck:now()+delay,quotaUntil:quota?now()+delay:0,quotaFailures:failures,
+        error:e.message+(quota?'；Google 版本查询配额受限，不代表缺少应用权限。工具已暂停此项目的自动及手动查询，冷却结束后可重试；请检查服务账号所属 Cloud 项目的 API 配额和用量。':e.status===403?'；请求被拒绝，请核对 Google 原始错误、服务账号对目标应用的访问权限及包名。':'')};
     }
     write();return status(id);
   }

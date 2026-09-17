@@ -23,3 +23,15 @@ test('review monitor treats empty lists as no result and deduplicates concurrent
   monitor.configure('one',{enabled:true,tracks:['production'],intervalMinutes:5});
   await Promise.all([monitor.check('one'),monitor.check('one')]);assert.equal(calls,1);assert.deepEqual(monitor.status('one').snapshot,[]);assert.equal(monitor.status('one').events.length,0);
 });
+
+test('quota 403 backs off persistently without permission advice or manual bypass',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gp-quota-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  let time=1000000,calls=0,fail=false;
+  const options={file:path.join(dir,'monitor.json'),profiles:()=>[{id:'one',packageName:'com.one'}],now:()=>time,listReleases:async()=>{calls++;if(fail)throw Object.assign(Error('Google 403：Listing releases quota exceeded.'),{status:403});return {releases:[{releaseName:'v1',releaseLifecycleState:'RELEASE_LIFECYCLE_STATE_IN_REVIEW'}]};}};
+  let monitor=createMonitor(options);const config={enabled:true,intervalMinutes:5,tracks:['production']};monitor.configure('one',config);
+  const good=await monitor.check('one');fail=true;
+  let result=await monitor.check('one');assert.match(result.error,/配额受限/);assert.doesNotMatch(result.error,/补充.*权限/);assert.deepEqual(result.snapshot,good.snapshot);assert.equal(result.lastCheck,good.lastCheck);assert.equal(result.quotaUntil,time+15*60000);
+  monitor=createMonitor(options);monitor.configure('one',config);await monitor.check('one');assert.equal(calls,2);assert.equal(monitor.due(),undefined);
+  time=result.quotaUntil;assert.equal(monitor.due(),'one');result=await monitor.check('one');assert.equal(calls,3);assert.equal(result.quotaUntil,time+30*60000);
+  time=result.quotaUntil;fail=false;result=await monitor.check('one');assert.equal(result.error,'');assert.equal(result.quotaUntil,0);assert.equal(result.quotaFailures,0);
+});
