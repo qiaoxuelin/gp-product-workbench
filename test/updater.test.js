@@ -7,6 +7,7 @@ async function settle(updater){for(let n=0;n<100;n++){if(['failed','installing']
 function fixture(t,options={}){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gp-update-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   fs.writeFileSync(path.join(dir,'update-install.ps1'),'fixture');
+  fs.writeFileSync(path.join(dir,'update-runner.js'),'fixture');
   return {dir,updater:createUpdater({root:dir,data:dir,version:'0.1.7',port:4318,supported:true,...options})};
 }
 test('update metadata only accepts official complete stable assets and compares versions numerically',()=>{
@@ -18,12 +19,13 @@ test('update metadata only accepts official complete stable assets and compares 
 });
 test('update download verifies bytes before launching helper and releases failed helper lock',async t=>{
   let launches=0;const child=new EventEmitter();child.unref=()=>{};
-  const {dir,updater}=fixture(t,{fetchImpl:async url=>new Response(url.includes('api.github.com')?JSON.stringify(metadata()):bytes),launch:()=>{launches++;queueMicrotask(()=>child.emit('spawn'));return child;}});
+  const {dir,updater}=fixture(t,{fetchImpl:async url=>new Response(url.includes('api.github.com')?JSON.stringify(metadata()):bytes),launch:(exe,args,options)=>{assert.equal(exe,process.execPath);assert.ok(args[0].endsWith('update-runner.js'));assert.equal(options.detached,true);launches++;queueMicrotask(()=>child.emit('spawn'));return child;}});
   updater.begin('0.2.0');await settle(updater);await new Promise(r=>setTimeout(r,10));
   assert.equal(launches,1);assert.equal(updater.status().phase,'installing');assert.equal(updater.isActive(),true);
   const job=fs.readdirSync(dir).find(n=>n.startsWith('update-')&&fs.statSync(path.join(dir,n)).isDirectory());
   assert.deepEqual(fs.readFileSync(path.join(dir,job,'release.zip')),bytes);
-  child.emit('exit',1);assert.equal(updater.isActive(),false);assert.equal(updater.status().phase,'failed');
+  // A successful OS exit code is not proof that the helper executed its script.
+  child.emit('exit',0);assert.equal(updater.isActive(),false);assert.equal(updater.status().phase,'failed');
 });
 test('corrupt download and changed release never launch an installer',async t=>{
   for(const expected of ['0.2.0','0.1.9']){

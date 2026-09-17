@@ -50,9 +50,16 @@ function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,l
       const install=path.join(job,'install.json');
       fs.writeFileSync(install,JSON.stringify({root:fs.realpathSync(root),data:fs.realpathSync(data),port,pid,nodeExecutable:process.execPath,version:info.version,zip,sha256:info.sha256}));
       fs.copyFileSync(path.join(root,'update-install.ps1'),path.join(job,'update-install.ps1'));
+      fs.copyFileSync(path.join(root,'update-runner.js'),path.join(job,'update-runner.js'));
       save({phase:'installing',version:info.version,message:'安装并重启中，请保持页面打开'});
-      const child=launch('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(job,'update-install.ps1'),'-JobFile',install],{detached:true,windowsHide:true,stdio:'ignore',env:{...process.env,GP_DATA_DIR:data,GP_PORT:String(port),GP_NO_BROWSER:'1'}});
-      await new Promise((resolve,reject)=>{child.once('error',reject);child.once('spawn',resolve);});child.once('exit',code=>{if(code!==0&&active){save({phase:'failed',message:'更新助手未正常完成，请重启工具后重试'});active=false;try{fs.unlinkSync(lock);}catch{}}});child.unref();
+      const log=fs.openSync(path.join(data,'update-helper.log'),'a');let child;
+      try{child=launch(process.execPath,[path.join(job,'update-runner.js'),install],{detached:true,windowsHide:true,stdio:['ignore',log,log],env:{...process.env,GP_DATA_DIR:data,GP_PORT:String(port),GP_NO_BROWSER:'1'}});}
+      finally{fs.closeSync(log);}
+      const ready=path.join(job,'runner-ready.json');
+      const failed=message=>{if(!['complete','failed'].includes(status().phase))save({phase:'failed',message});active=false;try{fs.unlinkSync(lock);}catch{}};
+      await new Promise((resolve,reject)=>{child.once('error',reject);child.once('spawn',resolve);});
+      const startupTimer=setTimeout(()=>{if(active&&!fs.existsSync(ready))failed('更新助手未开始执行；详情见 update-helper.log，请重新启动工具后重试');},15000);startupTimer.unref();
+      child.once('exit',()=>{clearTimeout(startupTimer);if(active)failed('更新助手已退出但未完成安装；详情见 update-helper.log');});child.unref();
       // The helper owns the lock until success/rollback. Keep this server read-only until it stops.
       fs.closeSync(lockFd);lockFd=undefined;
     }catch(e){if(lockFd!==undefined){fs.closeSync(lockFd);try{fs.unlinkSync(lock);}catch{}}save({phase:'failed',message:e.code==='EEXIST'?'已有更新任务。请等待完成；若上次被意外中断，请重启工具后重试。':e.message});active=false;}

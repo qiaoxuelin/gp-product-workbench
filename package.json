@@ -1,6 +1,6 @@
 {
   "name": "gp-product-workbench",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "scripts": {
     "start": "node server.js",
