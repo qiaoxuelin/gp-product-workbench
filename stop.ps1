@@ -2,7 +2,7 @@ param([switch]$Direct)
 $ErrorActionPreference = 'Stop'
 $gpRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $gpData = if ($env:GP_DATA_DIR) { $env:GP_DATA_DIR } elseif (Test-Path -LiteralPath (Join-Path $gpRoot 'runtime\node.exe')) { Join-Path $env:LOCALAPPDATA 'GP-Product-Workbench' } else { Join-Path $gpRoot 'data' }
-if (-not $Direct -and (Test-Path -LiteralPath (Join-Path $gpRoot 'runtime\node.exe'))) {
+if (-not $Direct) {
   . (Join-Path $gpRoot 'launch-target.ps1')
   $gpTarget=Get-PlayBatchTarget $gpRoot $gpData
   if ($gpTarget) {

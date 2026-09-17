@@ -437,7 +437,7 @@ test('monthly finance UI saves account report address, downloads original bytes 
 test('update dialog distinguishes source mode and preserves draft when installer fails',async({page})=>{
   await page.route('**/api/update/check',route=>route.fulfill({json:{currentVersion:'0.1.7',version:'0.2.0',available:true,supported:false,page:'https://github.com/qiaoxuelin/gp-product-workbench/releases/tag/v0.2.0',notes:'<script>alert(1)</script>'}}));
   await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
-  await page.locator('#update').click();await expect(page.locator('#dialogBody')).toContainText('源码运行');
+  await page.locator('#update').click();await expect(page.locator('#dialogBody')).toContainText('不支持自动安装');
   await expect(page.getByRole('button',{name:'更新并重启',exact:true})).toHaveCount(0);
   await page.locator('#closeModal').click();
   await page.route('**/api/update/check',route=>route.fulfill({json:{currentVersion:'0.1.7',version:'0.2.0',available:true,supported:true,page:'https://github.com/qiaoxuelin/gp-product-workbench/releases/tag/v0.2.0',notes:'test release'}}));
@@ -477,4 +477,38 @@ test('old backend update endpoint gives restart instructions instead of indefini
   await expect(page.locator('#dialogBody')).toContainText('启动工具.cmd');
   await expect(page.locator('#dialogBody')).not.toContainText('正在读取');
   await expect(page.getByRole('button',{name:'重试',exact:true})).toBeEnabled();
+});
+
+test('discard and reread removes persisted drafts even when storage quota prevents saving snapshots',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('8.88');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await expect(page.locator('#dirtyCount')).toHaveText('1');
+  await page.evaluate(()=>{const original=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('gp-workspace-v1:'))throw new DOMException('Quota exceeded','QuotaExceededError');return original.call(this,k,v);};});
+  await page.locator('#refresh').click();await page.getByRole('button',{name:'放弃草稿并重新读取',exact:true}).click();
+  await expect(page.locator('#dirtyCount')).toHaveText('0');await expect(page.locator('#status')).toContainText('已读取');
+  expect(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('gp-workspace-v1:')).length)).toBe(0);
+  await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('#dirtyCount')).toHaveText('0');
+});
+
+test('selected draft discard updates badge and stays discarded after reload',async({page})=>{
+  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('9.99');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await page.locator('[data-select="coins_100"]').check();await page.locator('#discard').click();await page.getByRole('button',{name:'撤销草稿',exact:true}).click();
+  await expect(page.locator('#pendingBadge')).toHaveText('0');await expect(page.locator('tr').filter({has:page.locator('[data-select="coins_100"]')})).toContainText('已同步');
+  await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('#pendingBadge')).toHaveText('0');
+});
+test('review monitor config shows approval separate from publication and retains last successful result on error',async({page})=>{
+  const p={id:'review',name:'Review App',packageName:'com.example.review',hasCredential:true};let request;
+  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));
+  await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'review'})));
+  await page.route('**/api/products',route=>route.fulfill({json:{products:[]}}));
+  const state={enabled:true,tracks:['production'],intervalMinutes:5,snapshot:[{track:'production',name:'1.0',versionCodes:['10'],state:'RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED'}],events:[],lastCheck:'2026-09-17T00:00:00Z',unread:0,error:''};
+  await page.route('**/api/monitor/status',route=>route.fulfill({json:state}));
+  await page.route('**/api/monitor/config',route=>{request=route.request().postDataJSON();return route.fulfill({json:state});});
+  await page.route('**/api/monitor/check',route=>route.fulfill({json:{...state,error:'Google 403：权限不足'}}));
+  await page.goto('/');await page.locator('#reviewMonitor').click();
+  await expect(page.locator('#reviewResults')).toContainText('通过待发布');
+  await page.locator('#reviewCheck').click();await expect(page.locator('#reviewResults')).toContainText('下方保留上次成功结果');
+  expect(request.profileId).toBe('review');expect(request.tracks).toEqual(['production']);
+  await expect(page.locator('#reviewResults')).toContainText('通过待发布');
 });

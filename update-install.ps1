@@ -18,7 +18,8 @@ function Stop-ExactServer([int]$ProcessId,[string]$AppRoot) {
   $gpProc=Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId"
   if (-not $gpProc) { return }
   $gpScript=Join-Path $AppRoot 'server.js'
-  if ($gpProc.Name -ne 'node.exe' -or $gpProc.ExecutablePath -ne (Join-Path $AppRoot 'runtime\node.exe') -or -not $gpProc.CommandLine.Contains('"'+$gpScript+'"')) { throw 'Server identity changed; refusing to stop.' }
+  $gpExpectedNode=if($AppRoot -eq $gpJob.root -and $gpJob.nodeExecutable){[string]$gpJob.nodeExecutable}else{Join-Path $AppRoot 'runtime\node.exe'}
+  if ($gpProc.Name -ne 'node.exe' -or $gpProc.ExecutablePath -ne $gpExpectedNode -or -not $gpProc.CommandLine.Contains('"'+$gpScript+'"')) { throw 'Server identity changed; refusing to stop.' }
   Stop-Process -Id $ProcessId -PassThru | Wait-Process -Timeout 15
 }
 function Start-ExactServer([string]$AppRoot) {

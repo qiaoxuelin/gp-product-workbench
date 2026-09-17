@@ -169,5 +169,33 @@ test('HTTP integration: demo lifecycle, CSRF, multi-project isolation, live adap
     await call('finance/download',{mode:'live',profileId:a.activeId,reportId:files.files[0].id},400);
     await call('config/switch',{id:a.activeId});
   }
+
+  {
+    let state='IN_REVIEW',issuer='';
+    const requests=[];
+    global.fetch=async(url,options={})=>{
+      if(String(url)==='https://oauth2.googleapis.com/token'){
+        const jwt=new URLSearchParams(options.body).get('assertion');
+        const claims=JSON.parse(Buffer.from(jwt.split('.')[1],'base64url'));
+        assert.equal(claims.scope,'https://www.googleapis.com/auth/androidpublisher');issuer=claims.iss;
+        return Response.json({access_token:'review-token',expires_in:3600});
+      }
+      requests.push([String(url),options.method,issuer]);
+      return Response.json({releases:[{releaseName:'1.0',activeArtifacts:[{versionCode:10}],releaseLifecycleState:'RELEASE_LIFECYCLE_STATE_'+state}]});
+    };
+    await call('monitor/config',{mode:'live',profileId:a.activeId,enabled:true,tracks:['production'],intervalMinutes:5});
+    let review=await call('monitor/check',{mode:'live',profileId:a.activeId});assert.equal(review.events.length,0);
+    state='APPROVED_NOT_PUBLISHED';
+    review=await call('monitor/check',{mode:'live',profileId:a.activeId});assert.equal(review.events.length,1);
+    assert.equal(requests[0][0],'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/com.test.a/tracks/production/releases');
+    assert(requests.every(r=>r[1]==='GET'));assert.equal(requests[0][2],'replacement@example.iam.gserviceaccount.com');
+    await call('config/switch',{id:b.activeId});
+    await call('monitor/check',{mode:'live',profileId:b.activeId});
+    assert.equal(requests.at(-1)[0],'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/com.test.b/tracks/production/releases');
+    assert.equal(requests.at(-1)[2],'test@example.iam.gserviceaccount.com');
+    await call('monitor/status',{mode:'live',profileId:a.activeId},400);
+    await call('monitor/check',{mode:'demo'},400);
+  }
+
   const history=await call('history');assert(history.operations.length>=5);
 });

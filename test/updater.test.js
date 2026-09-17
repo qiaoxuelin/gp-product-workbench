@@ -33,7 +33,7 @@ test('corrupt download and changed release never launch an installer',async t=>{
     assert.equal(updater.status().phase,'failed');assert.equal(updater.isActive(),false);assert.equal(launches,0);
   }
 });
-test('source mode rejects installation and network errors remain actionable',async t=>{
+test('unsupported platform rejects installation and network errors remain actionable',async t=>{
   const {updater}=fixture(t,{supported:false,fetchImpl:async()=>{throw Error('offline');}});
-  assert.throws(()=>updater.begin('0.2.0'),/源码版/);await assert.rejects(updater.check(),/无法连接 GitHub/);
+  assert.throws(()=>updater.begin('0.2.0'),/仅支持 Windows/);await assert.rejects(updater.check(),/无法连接 GitHub/);
 });

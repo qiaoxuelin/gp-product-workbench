@@ -11,7 +11,7 @@ function releaseInfo(value,current){
   if(!asset||asset.browser_download_url!==url||!/^sha256:[a-f0-9]{64}$/.test(asset.digest||'')||!Number.isSafeInteger(asset.size)||asset.size<1||asset.size>MAX)throw Error('新版下载包或 SHA256 校验信息不完整，请前往 GitHub 下载页');
   return {version,available:newer(version,current),url,size:asset.size,sha256:asset.digest.slice(7),notes:String(value.body||'').slice(0,30000),page:'https://github.com/'+REPO+'/releases/tag/v'+version};
 }
-function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,launch=spawn,supported=process.platform==='win32'&&fs.existsSync(path.join(root,'runtime','node.exe'))&&!fs.existsSync(path.join(root,'.git'))}){
+function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,launch=spawn,supported=process.platform==='win32'}){
   const statusFile=path.join(data,'update-status.json');let active=false;
   function status(){let s={phase:'idle'};try{s=JSON.parse(fs.readFileSync(statusFile,'utf8'));}catch{}return {...s,currentVersion:version,supported,page:PAGE,locked:fs.existsSync(path.join(data,'update.lock'))};}
   function save(s){fs.mkdirSync(data,{recursive:true});fs.writeFileSync(statusFile+'.tmp',JSON.stringify({...s,updatedAt:new Date().toISOString()}));fs.renameSync(statusFile+'.tmp',statusFile);}
@@ -48,7 +48,7 @@ function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,l
       save({phase:'downloading',version:info.version,received:0,total:info.size});
       const zip=await download(info,job);
       const install=path.join(job,'install.json');
-      fs.writeFileSync(install,JSON.stringify({root:fs.realpathSync(root),data:fs.realpathSync(data),port,pid,version:info.version,zip,sha256:info.sha256}));
+      fs.writeFileSync(install,JSON.stringify({root:fs.realpathSync(root),data:fs.realpathSync(data),port,pid,nodeExecutable:process.execPath,version:info.version,zip,sha256:info.sha256}));
       fs.copyFileSync(path.join(root,'update-install.ps1'),path.join(job,'update-install.ps1'));
       save({phase:'installing',version:info.version,message:'安装并重启中，请保持页面打开'});
       const child=launch('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(job,'update-install.ps1'),'-JobFile',install],{detached:true,windowsHide:true,stdio:'ignore',env:{...process.env,GP_DATA_DIR:data,GP_PORT:String(port),GP_NO_BROWSER:'1'}});
@@ -58,7 +58,7 @@ function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,l
     }catch(e){if(lockFd!==undefined){fs.closeSync(lockFd);try{fs.unlinkSync(lock);}catch{}}save({phase:'failed',message:e.code==='EEXIST'?'已有更新任务。请等待完成；若上次被意外中断，请重启工具后重试。':e.message});active=false;}
   }
   function begin(expected){
-    if(!supported)throw Error('自动更新仅适用于 Windows 免安装版；源码版请通过 Git 更新或下载免安装包');
+    if(!supported)throw Error('自动安装仅支持 Windows；请前往下载页获取适用版本');
     if(active)throw Error('更新正在进行');
     if(!/^\d+\.\d+\.\d+$/.test(expected||''))throw Error('请先检查更新');
     active=true;save({phase:'checking',version:expected});void run(expected);return {started:true};

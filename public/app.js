@@ -76,7 +76,12 @@ function showError(message){
 }
 async function job(fn,message){working=true;status(message||'处理中…');const buttons=[...document.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);$('mode').disabled=true;$('project').disabled=true;
   try{return await fn();}finally{working=false;buttons.forEach(b=>b.disabled=false);$('mode').disabled=false;renderHeader();}}
-function persist(){try{localStorage.setItem(key(),JSON.stringify({base,draft,states}));}catch{status('本机草稿保存失败，请导出 JSON 备份后继续',true);}}
+function persist(){
+  try{
+    if(!draft.some(dirty)){localStorage.removeItem(key());return true;}
+    localStorage.setItem(key(),JSON.stringify({base,draft,states}));return true;
+  }catch{status('本机草稿保存失败，请导出 JSON 备份后继续',true);return false;}
+}
 const VISIT_KEY='gp-last-visit-v1';
 function rememberVisit(){try{localStorage.setItem(VISIT_KEY,JSON.stringify({mode,projectId:settings.activeId}));}catch{status('无法保存上次访问项目，请检查浏览器存储权限',true);}}
 async function restoreVisit(){
@@ -136,12 +141,12 @@ async function loadProducts(rebase=false){
       base=data.products.filter(p=>!preserved.has(p.productId)).concat(oldBase.filter(p=>preserved.has(p.productId)));
       draft=data.products.filter(p=>!preserved.has(p.productId)).concat(edits);
     }else{base=data.products;draft=clone(base);states={};}
-    selected.clear();persist();render();status('已读取 '+data.products.length+' 个商品'+(rebase?'；未提交草稿已保留':''));
+    activePlan=null;selected.clear();const saved=persist();render();if(saved)status('已读取 '+data.products.length+' 个商品'+(rebase?'；未提交草稿已保留':''));
   },'正在读取全部商品…');
 }
 function refresh(){
   if(draft.some(dirty)){modal('刷新商品', '<p>当前有未提交草稿。保留草稿会保留它们原来的版本依据，提交时仍检查远端冲突。</p>',[
-    {label:'取消',run:close},{label:'放弃草稿并重新读取',run:async()=>{close();await loadProducts();}},
+    {label:'取消',run:close},{label:'放弃草稿并重新读取',run:async()=>{localStorage.removeItem(key());draft=clone(base);states={};activePlan=null;selected.clear();render();close();await loadProducts();}},
     {label:'保留草稿并读取',class:'primary',run:async()=>{close();await loadProducts(true);}}]);}
   else return loadProducts();
 }
@@ -425,7 +430,10 @@ async function preview(activationChosen=false){
 }
 function discard(){
   const products=picked();modal('撤销所选草稿','<p>撤销 '+products.length+' 个商品的本地修改，未提交的新商品将从草稿中移除。</p>',[{label:'取消',run:close},{label:'撤销草稿',run:()=>{
-    for(const p of products){draft=draft.filter(x=>x.productId!==p.productId);if(old(p.productId))draft.push(clone(old(p.productId)));delete states[p.productId];}selected.clear();persist();render();close();
+    const previousDraft=clone(draft),previousStates=clone(states);
+    for(const p of products){draft=draft.filter(x=>x.productId!==p.productId);if(old(p.productId))draft.push(clone(old(p.productId)));delete states[p.productId];}
+    if(!persist()){draft=previousDraft;states=previousStates;throw Error('无法保存撤销结果，修改仍保留。请先导出 JSON 备份并检查浏览器存储空间。');}
+    activePlan=null;selected.clear();render();close();status('已撤销 '+products.length+' 个商品的本地草稿；没有向 Google 提交修改');
   }}]);
 }
 async function history(){
@@ -479,6 +487,40 @@ function financeDialog(){
 }
 
 
+
+const reviewLabels={DRAFT:'草稿',NOT_SENT_FOR_REVIEW:'待送审',IN_REVIEW:'审核中',APPROVED_NOT_PUBLISHED:'通过待发布',NOT_APPROVED:'审核未通过',PUBLISHED:'已发布',UNSPECIFIED:'未知状态'};
+const reviewLabel=state=>reviewLabels[String(state).replace(/^RELEASE_LIFECYCLE_STATE_/,'')]||'未知状态（'+state+'）';
+const reviewTime=value=>value?new Date(value).toLocaleString():'尚未检查';
+async function reviewMonitorDialog(){
+  if(mode!=='live'){modal('应用审核监控','<p>请先切换到真实项目并保存服务账号授权，再查看应用版本的审核与发布状态。</p>',[{label:'关闭',run:close}]);return;}
+  const state=await job(()=>api('monitor/status',{mode}),'正在读取审核监控配置…');
+  const choices=[...new Set(['production','internal','alpha','beta',...state.tracks])];
+  modal('应用审核监控 · '+settings.current.name,'<p>监控应用版本：审核中、通过待发布、审核未通过、已发布。首次检查建立基线，后续变化会记录并显示在侧栏。</p><p class="help">本机后台服务运行时持续检查，关闭浏览器也会检查；停止工具或电脑休眠期间暂停。这里不会自动提交审核或发布版本。</p>'+
+    '<div class="form-grid"><label class="checkline wide"><input id="reviewEnabled" type="checkbox" '+(state.enabled?'checked':'')+'>启用此项目的后台监控</label><label class="field">检查间隔<select id="reviewInterval">'+[5,15,30,60].map(n=>'<option value="'+n+'" '+(state.intervalMinutes===n?'selected':'')+'>'+n+' 分钟</option>').join('')+'</select></label>'+multiMarkup('reviewTracks','发布轨道')+
+    '<details class="wide"><summary>自定义封闭测试轨道</summary><p class="help">如使用自定义轨道，填写 Play Console 中的轨道 ID 并添加。</p><input id="reviewCustomTrack" aria-label="自定义轨道 ID"><button id="reviewAddTrack">添加轨道</button></details></div>'+
+    '<div class="finance-actions"><button id="reviewSave">保存监控设置</button><button id="reviewCheck" class="primary">保存并立即检查</button><button id="reviewRead">标记已读</button></div><div id="reviewResults"></div><p class="help">“已发布”不等于全量发布，也可能是分阶段或暂停后可恢复的版本。无返回结果或版本从列表消失不代表被拒绝。</p><p><a href="https://play.google.com/console" target="_blank" rel="noreferrer">打开 Play Console ↗</a></p>',
+    [{label:'关闭',run:close}]);
+  initMulti('reviewTracks',choices,state.tracks,null);
+  const draw=result=>{
+    $('reviewResults').innerHTML='<p>上次成功检查：'+esc(reviewTime(result.lastCheck))+' · 后台监控：'+(result.enabled?'已开启':'已关闭')+'</p>'+
+      (result.error?'<p class="error-box">本次检查失败：'+esc(result.error)+'<br>下方保留上次成功结果。</p>':'')+
+      '<div class="finance-table"><table><thead><tr><th>轨道 / 版本</th><th>版本号</th><th>状态</th></tr></thead><tbody>'+result.snapshot.map(r=>'<tr><td>'+esc(r.track+' / '+r.name)+'</td><td>'+esc(r.versionCodes.join(', '))+'</td><td>'+esc(reviewLabel(r.state))+'</td></tr>').join('')+'</tbody></table></div>'+
+      (!result.snapshot.length?'<p class="help">'+(result.lastCheck?'所选轨道未返回当前版本；不代表审核通过或拒绝。':'尚未读取 Google，请点击立即检查。')+'</p>':'')+
+      '<h3>最近状态变化</h3>'+result.events.map(e=>'<p>'+esc(reviewTime(e.at)+' · '+e.track+' / '+e.name+' ['+e.versionCodes.join(', ')+']：'+(e.before?reviewLabel(e.before):'新版本')+' → '+reviewLabel(e.after))+'</p>').join('')+
+      (!result.events.length?'<p class="help">暂无变化记录。首次读取仅建立基线。</p>':'');
+  };
+  draw(state);
+  bind('reviewAddTrack',()=>{const value=$('reviewCustomTrack').value.trim();if(!value||value.length>100||/[\/\\\x00-\x1f]/.test(value))throw Error('请输入有效的轨道 ID');const selected=$('reviewTracks').selectedValues();if(!choices.includes(value))choices.push(value);initMulti('reviewTracks',choices,[...selected,value],null);$('reviewCustomTrack').value='';});
+  const saveReview=()=>api('monitor/config',{mode,enabled:$('reviewEnabled').checked,intervalMinutes:Number($('reviewInterval').value),tracks:$('reviewTracks').selectedValues()});
+  bind('reviewSave',async()=>{const result=await job(saveReview,'正在保存监控设置…');draw(result);status(result.enabled?'后台审核监控已开启':'后台审核监控已关闭');});
+  bind('reviewCheck',async()=>{const result=await job(async()=>{await saveReview();return api('monitor/check',{mode});},'正在查询 Google 审核与发布状态…');draw(result);status(result.error?'检查未成功，详情见窗口':'审核状态已更新',!!result.error);await refreshReviewBadge();});
+  bind('reviewRead',async()=>{draw(await api('monitor/acknowledge',{mode}));await refreshReviewBadge();});
+}
+async function refreshReviewBadge(){
+  if(working)return;
+  try{const result=await api('monitor/summary');const count=result.projects.reduce((n,p)=>n+p.unread,0);$('reviewBadge').textContent=count?' · '+count:'';$('reviewMonitor').title=result.projects.filter(p=>p.unread).map(p=>p.name+'：'+p.unread+' 条状态变化').join('\n');}catch{}
+}
+
 async function updateDialog(){
   modal('检查更新','<p>正在读取 GitHub 最新正式版本…</p>',[{label:'关闭',run:close}]);
   let release;
@@ -489,9 +531,9 @@ async function updateDialog(){
   }
   modal('检查更新','<p>当前版本：<b>'+esc(release.currentVersion)+'</b>　最新版本：<b>'+esc(release.version)+'</b></p>'+
     '<p>'+(release.available?'发现新版本。':'当前已是最新版本，或正在使用更高版本。')+'</p>'+
-    (release.supported?'<p>更新会下载并校验安装包，短暂停止服务后重启。项目、授权和已保存的浏览器草稿保留；原启动入口仍可使用。</p>':'<p class="warning">当前为源码运行，自动安装仅支持 Windows 免安装版。请通过 Git 更新源码，或前往下载页获取免安装包。</p>')+
+    (release.supported?'<p>检查后可直接下载、校验、安装并重启，无需另开 GitHub。项目、授权和已保存草稿保留，原启动入口仍可用。源码启动时会安装独立发布版并切换，源码文件保留。</p>':'<p class="warning">此运行环境不支持自动安装。请前往下载页获取 Windows 免安装包。</p>')+
     '<p><a href="'+esc(release.page)+'" target="_blank" rel="noreferrer">打开 GitHub 下载页 ↗</a></p><details><summary>查看发布说明</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(release.notes)+'</pre></details>',
-    [{label:'关闭',run:close},...(release.available&&release.supported?[{label:'更新并重启',primary:true,run:()=>installUpdate(release.version)}]:[])]);
+    [{label:'关闭',run:close},...(release.available&&release.supported?[{label:'更新并重启',class:'primary',run:()=>installUpdate(release.version)}]:[])]);
 }
 async function installUpdate(version){
   // Abort if draft persistence fails; do not silently restart with unsaved browser data.
@@ -524,7 +566,7 @@ async function installUpdate(version){
 async function init(){
   const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
   bind('about',()=>modal('关于 PlayBatch','<h3>Google Play 商品工作台</h3><p>由 <a href="https://github.com/qiaoxuelin" target="_blank" rel="noreferrer">qiaoxuelin</a> 开发</p><p>当前版本：'+esc(session.version||'未知')+'</p><p>一次性商品批量创建、地区改价、多语言与状态管理。</p><p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">查看新版与更新说明 ↗</a></p>',[{label:'关闭',run:close}]));settings=await api('config');await restoreVisit();restore();
-  bind('update',updateDialog);bind('finance',financeDialog);
+  bind('reviewMonitor',reviewMonitorDialog);bind('update',updateDialog);bind('finance',financeDialog);
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});
@@ -536,5 +578,6 @@ async function init(){
   $('mode').onchange=async()=>{if(working)return;persist();mode=$('mode').value;restore();status('已切换工作区');if(mode==='demo'&&!draft.length){try{await loadProducts();}catch(e){showError(e.message);}}};
   $('project').onchange=async()=>{if(working)return;try{persist();settings=await api('config/switch',{id:$('project').value});restore();status('已切换到 '+settings.current.name+'；点击读取商品加载此项目');}catch(e){showError(e.message);render();}};
   if(!draft.length)await loadProducts();else status('已恢复本机草稿');
+  await refreshReviewBadge();setInterval(refreshReviewBadge,30000);
 }
 init().catch(e=>showError(e.message));

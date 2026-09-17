@@ -29,27 +29,29 @@ function seed() {
   }));
 }
 let demo=read('demo.json',seed());
-async function accessToken(scope='https://www.googleapis.com/auth/androidpublisher') {
+async function accessToken(scope='https://www.googleapis.com/auth/androidpublisher',profile=config) {
   if(!['https://www.googleapis.com/auth/androidpublisher',Finance.SCOPE].includes(scope))throw Error('授权范围无效');
-  if(tokenCache&&tokenCache.scope===scope&&tokenCache.expires>Date.now()+60000)return tokenCache.token;
-  const key=Cred.loadCredential(DATA,config);
+  const identity=JSON.stringify([profile.id,profile.credentialFile,profile.credentialPath]);
+  if(tokenCache&&tokenCache.identity===identity&&tokenCache.scope===scope&&tokenCache.expires>Date.now()+60000)return tokenCache.token;
+  const key=Cred.loadCredential(DATA,profile);
   const now=Math.floor(Date.now()/1000), b64=v=>Buffer.from(JSON.stringify(v)).toString('base64url');
   const unsigned=b64({alg:'RS256',typ:'JWT'})+'.'+b64({iss:key.client_email,scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
   let signature;try{signature=crypto.sign('RSA-SHA256',Buffer.from(unsigned),key.private_key).toString('base64url');}catch{throw Error('服务账号私钥无效');}
   const response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:unsigned+'.'+signature}),signal:AbortSignal.timeout(30000),redirect:'error'});
   const result=await response.json();
   if(!response.ok)throw Error('Google 授权失败：'+(result.error_description||result.error||response.status));
-  tokenCache={scope,token:result.access_token,expires:Date.now()+Number(result.expires_in||3600)*1000};
+  tokenCache={identity,scope,token:result.access_token,expires:Date.now()+Number(result.expires_in||3600)*1000};
   return tokenCache.token;
 }
-async function google(method,suffix,body) {
-  const token=await accessToken();
-  const response=await fetch('https://androidpublisher.googleapis.com/androidpublisher/v3/applications/'+encodeURIComponent(config.packageName)+suffix,{
+async function google(method,suffix,body,profile=config) {
+  const token=await accessToken('https://www.googleapis.com/auth/androidpublisher',profile);
+  const response=await fetch('https://androidpublisher.googleapis.com/androidpublisher/v3/applications/'+encodeURIComponent(profile.packageName)+suffix,{
     method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(45000),redirect:'error'});
   const raw=await response.text();let result;try{result=raw?JSON.parse(raw):{};}catch{throw Error('Google 返回非 JSON 响应，HTTP '+response.status);}
   if(!response.ok){const e=Error('Google '+response.status+'：'+(result.error?.message||'请求失败'));e.status=response.status;throw e;}
   return result;
 }
+const monitor=require('./review-monitor').createMonitor({file:path.join(DATA,'review-monitor.json'),profiles:()=>settings.profiles,listReleases:(profile,track)=>google('GET','/tracks/'+encodeURIComponent(track)+'/releases',undefined,profile)});
 function packageFor(mode){if(!['demo','live'].includes(mode))throw Error('请选择演示或真实模式');if(mode==='demo')return 'com.example.demo';if(!config.packageName)throw Error('请先设置应用包名');return config.packageName;}
 async function getProduct(mode,id) {
   if(mode==='demo')return C.clone(demo.find(p=>p.productId===id)||null);
@@ -209,6 +211,14 @@ async function route(url,b) {
   if(url==='/api/update/status')return updater.status();
   if(url==='/api/update/start')return updater.begin(b.version);
   if(b.mode==='live'&&!url.startsWith('/api/config')&&b.profileId!==config.id)throw Error('当前项目已切换，请重新选择项目并读取商品');
+  if(url==='/api/monitor/summary')return {projects:monitor.summary()};
+  if(url.startsWith('/api/monitor/')){
+    if(b.mode!=='live'||!config.id)throw Error('审核监控需要切换到已配置授权的真实项目');
+    if(url==='/api/monitor/status')return monitor.status(config.id);
+    if(url==='/api/monitor/config')return monitor.configure(config.id,b);
+    if(url==='/api/monitor/check')return monitor.check(config.id);
+    if(url==='/api/monitor/acknowledge')return monitor.acknowledge(config.id);
+  }
   if(url.startsWith('/api/finance/')){
     if(b.mode!=='live')throw Error('账单导出需要真实项目及 Google 财务权限，演示模式不提供真实账单');
     if(!config.id)throw Error('请先配置项目');
@@ -326,5 +336,13 @@ const server=http.createServer(async(req,res)=>{
     }finally{busy=false;}
   }catch(e){send(res,400,{error:e.message});}
 });
-if(require.main===module)server.listen(PORT,'127.0.0.1',()=>console.log('GP Product Workbench: http://127.0.0.1:'+PORT));
+if(require.main===module){
+  server.listen(PORT,'127.0.0.1',()=>console.log('GP Product Workbench: http://127.0.0.1:'+PORT));
+  let monitorChecking=false;
+  const monitorTimer=setInterval(async()=>{
+    if(busy||monitorChecking||updater.isActive())return;
+    const id=monitor.due();if(!id)return;
+    monitorChecking=true;try{await monitor.check(id);}catch(e){console.error('Review monitor:',e.message);}finally{monitorChecking=false;}
+  },30000);monitorTimer.unref();server.on('close',()=>clearInterval(monitorTimer));
+}
 module.exports={server,projectContains,checkTransitions};

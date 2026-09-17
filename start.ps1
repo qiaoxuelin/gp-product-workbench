@@ -6,7 +6,7 @@ $gpUrl = 'http://127.0.0.1:' + $gpPort
 $gpBundled = Join-Path $gpRoot 'runtime\node.exe'
 if (-not $env:GP_DATA_DIR -and (Test-Path -LiteralPath $gpBundled)) { $env:GP_DATA_DIR = Join-Path $env:LOCALAPPDATA 'GP-Product-Workbench' }
 $gpData = if ($env:GP_DATA_DIR) { $env:GP_DATA_DIR } else { Join-Path $gpRoot 'data' }
-if (-not $Direct -and (Test-Path -LiteralPath (Join-Path $gpRoot 'runtime\node.exe'))) {
+if (-not $Direct) {
   . (Join-Path $gpRoot 'launch-target.ps1')
   $gpTarget=Get-PlayBatchTarget $gpRoot $gpData
   if ($gpTarget) {
