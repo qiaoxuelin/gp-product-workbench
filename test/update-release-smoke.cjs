@@ -6,7 +6,17 @@ const root=path.resolve(__dirname,'..'),version=process.argv[2]||'0.1.8',patched
 const work=fs.mkdtempSync(path.join(root,'dist','update-real-'));
 const original=path.join(work,'旧版 original'),data=path.join(work,'用户 data'),port=14349;
 const env=Object.fromEntries(Object.entries(process.env).filter(([key],i,all)=>all.findIndex(([other])=>other.toLowerCase()===key.toLowerCase())===i));
-Object.assign(env,{GP_DATA_DIR:data,GP_PORT:String(port),GP_NO_BROWSER:'1'});
+Object.assign(env,{GP_DATA_DIR:data,GP_PORT:String(port),GP_NO_BROWSER:'1',GP_NO_TRAY:'1'});
+const localTarget=process.argv.find(arg=>arg.startsWith('--local-target='))?.split('=')[1];
+if(localTarget){
+ const crypto=require('node:crypto'),zip=path.join(root,'dist',`PlayBatch-${localTarget}-Windows-x64.zip`),bytes=fs.readFileSync(zip);
+ const url=`https://github.com/qiaoxuelin/gp-product-workbench/releases/download/v${localTarget}/PlayBatch-${localTarget}-Windows-x64.zip`;
+ const metadata={tag_name:'v'+localTarget,assets:[{name:`PlayBatch-${localTarget}-Windows-x64.zip`,state:'uploaded',browser_download_url:url,size:bytes.length,digest:'sha256:'+crypto.createHash('sha256').update(bytes).digest('hex')}]};
+ const preload=path.join(work,'local-release-transport.cjs');
+ fs.writeFileSync(preload,`const fs=require('node:fs'),original=global.fetch;global.fetch=async(url,...args)=>String(url)==='https://api.github.com/repos/qiaoxuelin/gp-product-workbench/releases/latest'?Response.json(${JSON.stringify(metadata)}):String(url)===${JSON.stringify(url)}?new Response(fs.readFileSync(${JSON.stringify(zip)})):original(url,...args);`);
+ env.NODE_OPTIONS='--require="'+preload.replaceAll('\\','/')+'"';
+ console.log('TRANSPORT=local release metadata and ZIP; installed files remain unchanged');
+}
 const q=s=>"'"+s.replaceAll("'","''")+"'";
 function ps(script){const log=path.join(work,'driver-'+Date.now()+'.log'),fd=fs.openSync(log,'w');try{execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from("$ProgressPreference='SilentlyContinue';"+script,'utf16le').toString('base64')],{env,windowsHide:true,stdio:['ignore',fd,fd],timeout:90000});return 'Driver completed; log='+log;}finally{fs.closeSync(fd);}}
 function read(file){try{return fs.readFileSync(path.join(data,file),'utf8')}catch{return ''}}

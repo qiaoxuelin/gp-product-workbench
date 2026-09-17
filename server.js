@@ -12,6 +12,8 @@ fs.mkdirSync(DATA,{recursive:true});
 const SCHEMAS=JSON.parse(fs.readFileSync(path.join(ROOT,'google-api-discovery.json'),'utf8')).schemas;
 const PORT=Number(process.env.GP_PORT||4318),SESSION=crypto.randomBytes(32).toString('hex');
 const updater=require('./updater').createUpdater({root:ROOT,data:DATA,version:APP_VERSION,port:PORT});
+const desktop=require('./desktop-integration').createDesktop({root:ROOT,data:DATA,port:PORT});
+const diagnostics=()=>require('./diagnostics').createDiagnostics({data:DATA,version:APP_VERSION,port:PORT,update:updater.status,desktop:desktop.status()});
 const read=(name,fallback)=>{try{return JSON.parse(fs.readFileSync(path.join(DATA,name),'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const save=(name,obj)=>{const dest=path.join(DATA,name);fs.writeFileSync(dest+'.tmp',JSON.stringify(obj,null,2),{mode:0o600});fs.renameSync(dest+'.tmp',dest);};
 let settings=read('config.json',{profiles:[],activeId:''});
@@ -213,6 +215,13 @@ async function recoverOperation(b){
   return {entries,resolved,blocked};
 }
 async function route(url,b) {
+  if(url==='/api/system/status')return {version:APP_VERSION,busy,update:updater.status(),desktop:desktop.status()};
+  if(url==='/api/system/diagnostics')return diagnostics();
+  if(url==='/api/system/shortcuts')return desktop.shortcuts();
+  if(url==='/api/system/quit'){
+    setTimeout(()=>{server.close();server.closeAllConnections();if(require.main===module)process.exit(0);},300);
+    return {stopping:true};
+  }
   if(url==='/api/update/check')return updater.check();
   if(url==='/api/update/status')return updater.status();
   if(url==='/api/update/start')return updater.begin(b.version);
@@ -328,6 +337,10 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method!=='POST'||req.headers['x-gp-token']!==SESSION)return send(res,403,{error:'请从本机工具页面操作'});
   if(!(req.headers['content-type']||'').startsWith('application/json'))return send(res,415,{error:'需要 JSON'});
+  // Support reads remain available while an update or business operation runs.
+  if(['/api/system/status','/api/system/diagnostics'].includes(url)){
+    try{return send(res,200,await route(url,{}));}catch(e){return send(res,400,{error:e.message});}
+  }
   if(updater.isActive()&&url!=='/api/update/status')return send(res,409,{error:'正在更新，请等待重启完成'});
   if(busy)return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
   let text='';try{

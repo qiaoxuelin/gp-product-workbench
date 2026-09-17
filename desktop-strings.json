@@ -1,0 +1,10 @@
+{
+ "open":"打开工作台",
+ "shortcuts":"创建桌面与开始菜单快捷方式",
+ "diagnostics":"导出诊断信息…",
+ "quit":"退出 PlayBatch",
+ "quitPrompt":"退出后，后台监控也会停止。确定退出 PlayBatch？",
+ "disconnected":"正在连接工作台…",
+ "created":"桌面和开始菜单快捷方式已创建。",
+ "diagnosticsTitle":"保存 PlayBatch 诊断信息"
+}

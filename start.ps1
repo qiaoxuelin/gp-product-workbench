@@ -41,5 +41,10 @@ if (-not $gpRunning) {
   }
   if (-not $gpRunning) { throw 'Startup failed. See data\server-error.log.' }
 }
+if ($env:GP_NO_TRAY -ne '1') {
+  $gpTrayArgs='-NoProfile -ExecutionPolicy Bypass -STA -File "'+(Join-Path $gpRoot 'tray.ps1')+'" -DataPath "'+$gpData+'" -Port '+$gpPort
+  try { Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $gpTrayArgs -WindowStyle Hidden }
+  catch { [IO.File]::AppendAllText((Join-Path $gpData 'tray-error.log'),($_.Exception.Message+[Environment]::NewLine)) }
+}
 if ($env:GP_NO_BROWSER -ne '1') { Start-Process $gpUrl }
 Write-Host "GP Product Workbench is running at $gpUrl"

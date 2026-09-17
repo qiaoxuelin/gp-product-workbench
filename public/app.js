@@ -569,6 +569,34 @@ async function refreshReviewBadge(){
   try{const result=await api('monitor/summary');const count=result.projects.reduce((n,p)=>n+p.unread,0);$('reviewBadge').textContent=count?' · '+count:'';$('reviewMonitor').title=result.projects.filter(p=>p.unread).map(p=>p.name+'：'+p.unread+' 条状态变化').join('\n');}catch{}
 }
 
+async function exportDiagnostics(){
+  const report=await api('system/diagnostics');
+  download('PlayBatch-diagnostics-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json',JSON.stringify(report,null,2),'application/json');
+  status('诊断信息已导出，可将文件发送给维护者');
+}
+function updateSummary(state,version){
+  if(state.phase==='complete'&&state.version===version&&!state.locked)return '已更新到 '+version+'，当前运行正常。';
+  if(state.phase==='failed')return '上次更新未完成。当前运行版本：'+version+'。'+(state.message||'可导出诊断信息排查。');
+  if(['checking','downloading','installing'].includes(state.phase))return '正在更新到 '+(state.version||'新版本')+'，当前运行版本：'+version+'。';
+  return '当前运行版本：'+version+'。';
+}
+async function supportDialog(){
+  const info=await api('system/status');
+  modal('帮助与诊断','<p><b>PlayBatch v'+esc(info.version)+'</b> · '+(info.desktop.trayRunning?'托盘正在运行':'托盘未运行，可通过“启动工具”重新打开')+'</p><p>'+esc(updateSummary(info.update,info.version))+'</p>'+
+    '<h3>快捷入口</h3><p>在桌面和开始菜单创建 PlayBatch 快捷方式。更新后仍可从同一个入口打开。</p>'+
+    '<h3>诊断信息</h3><p>导出版本、运行状态、更新阶段和日志中的错误类型，便于排查。文件不包含私钥、令牌、项目内容或原始日志。</p>',[
+    {label:'关闭',run:close},...(info.desktop.supported?[{label:'创建/修复快捷方式',run:async()=>{await api('system/shortcuts');status('桌面和开始菜单快捷方式已创建');close();}}]:[]),
+    {label:'导出诊断信息',class:'primary',run:exportDiagnostics}]);
+}
+async function showUpdateOutcome(version){
+  const info=await api('system/status'),state=info.update;
+  if(!['complete','failed'].includes(state.phase))return;
+  if(state.phase==='complete'&&(state.locked||state.version!==version))return;
+  const stamp=JSON.stringify([state.phase,state.version,state.updatedAt]);
+  if(localStorage.getItem('gp-update-notice-v1')===stamp)return;
+  $('updateNotice').hidden=false;$('updateNoticeText').textContent=updateSummary(state,version);
+  $('dismissUpdateNotice').onclick=()=>{localStorage.setItem('gp-update-notice-v1',stamp);$('updateNotice').hidden=true;};
+}
 async function updateDialog(){
   modal('检查更新','<p>正在读取 GitHub 最新正式版本…</p>',[{label:'关闭',run:close}]);
   let release;
@@ -598,13 +626,13 @@ async function installUpdate(version){
       }
       if(state.phase==='failed'){
         working=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);$('mode').disabled=false;$('project').disabled=false;syncActions();
-        modal('更新未完成','<p class="error-box">'+esc(state.message)+'</p><p>旧版程序与本机数据已保留。可重试；若服务未启动，请双击原来的“启动工具.cmd”。</p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">前往 GitHub 手动下载</a>',[{label:'关闭',run:close},{label:'重新检查',run:updateDialog}]);return;
+        modal('更新未完成','<p class="error-box">'+esc(state.message)+'</p><p>当前版本：'+esc(state.currentVersion||'待确认')+'。可导出诊断信息排查；若服务未启动，请双击原来的“启动工具.cmd”。</p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">前往 GitHub 手动下载</a>',[{label:'关闭',run:close},{label:'导出诊断信息',run:exportDiagnostics},{label:'重新检查',run:updateDialog}]);return;
       }
-      $('updateProgress').textContent=state.phase==='downloading'?'正在下载：'+Math.floor((state.received||0)/state.total*100)+'%':'正在校验、安装并重启，请稍候…';
+      $('updateProgress').textContent=state.phase==='downloading'?'正在下载：'+Math.floor((state.received||0)/state.total*100)+'%':state.phase==='checking'?'正在核对最新版本…':state.phase==='installing'?'正在安装 '+version+' 并重启，请稍候…':'正在确认 '+version+' 的运行状态…';
     }catch{$('updateProgress').textContent='正在等待工具重启…';}
     if(Date.now()-started>10*60*1000){
       working=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);$('mode').disabled=false;$('project').disabled=false;syncActions();
-      modal('更新状态待确认','<p>等待重启超时。请双击原来的“启动工具.cmd”并刷新页面，或前往 GitHub 手动下载。已有项目数据仍保留。</p>',[{label:'关闭',run:close}]);return;
+      modal('更新状态待确认','<p>等待重启超时。可先重新读取运行状态或导出诊断信息。若服务无法连接，请双击原来的“启动工具.cmd”再刷新页面。</p>',[{label:'关闭',run:close},{label:'导出诊断信息',run:exportDiagnostics},{label:'查看运行状态',run:supportDialog}]);return;
     }
     setTimeout(poll,1200);
   };
@@ -614,7 +642,7 @@ async function installUpdate(version){
 async function init(){
   const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
   bind('about',()=>modal('关于 PlayBatch','<h3>Google Play 商品工作台</h3><p>由 <a href="https://github.com/qiaoxuelin" target="_blank" rel="noreferrer">qiaoxuelin</a> 开发</p><p>当前版本：'+esc(session.version||'未知')+'</p><p>一次性商品批量创建、地区改价、多语言与状态管理。</p><p><a href="https://github.com/qiaoxuelin/gp-product-workbench/releases/latest" target="_blank" rel="noreferrer">查看新版与更新说明 ↗</a></p>',[{label:'关闭',run:close}]));settings=await api('config');await restoreVisit();restore();
-  bind('reviewMonitor',reviewMonitorDialog);bind('update',updateDialog);bind('finance',financeDialog);
+  bind('reviewMonitor',reviewMonitorDialog);bind('update',updateDialog);bind('finance',financeDialog);bind('support',supportDialog);
   bind('newProject',()=>openSettings(''));bind('settings',()=>openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});
@@ -627,5 +655,6 @@ async function init(){
   $('project').onchange=async()=>{if(working)return;try{persist();settings=await api('config/switch',{id:$('project').value});restore();status('已切换到 '+settings.current.name+'；点击读取商品加载此项目');}catch(e){showError(e.message);render();}};
   if(!draft.length)await loadProducts();else status('已恢复本机草稿');
   await refreshReviewBadge();setInterval(refreshReviewBadge,30000);
+  try{await showUpdateOutcome(session.version);}catch{}
 }
 init().catch(e=>showError(e.message));

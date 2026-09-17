@@ -1,5 +1,21 @@
 const crypto=require('node:crypto');
 const {test,expect}=require('@playwright/test');
+test('support exports safe diagnostics and creates shortcuts through its explicit button',async({page})=>{
+ let created=false;await page.route('**/api/system/shortcuts',route=>{created=true;return route.fulfill({json:{created:true}});});
+ await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+ await page.locator('#support').click();await expect(page.locator('#dialogTitle')).toHaveText('帮助与诊断');
+ await page.screenshot({path:'data/ui-support.png',fullPage:true,animations:'disabled'});
+ const pending=page.waitForEvent('download');await page.getByRole('button',{name:'导出诊断信息',exact:true}).click();const file=await pending;
+ const stream=await file.createReadStream();let content='';for await(const chunk of stream)content+=chunk;
+ expect(JSON.parse(content).format).toBe('playbatch-diagnostics-v1');expect(content).not.toContain('token');
+ await page.getByRole('button',{name:'创建/修复快捷方式',exact:true}).click();expect(created).toBe(true);await expect(page.locator('#status')).toContainText('桌面和开始菜单快捷方式已创建');
+});
+test('successful update is visible after reload and can be dismissed persistently',async({page})=>{
+ const version=require('../package.json').version;
+ await page.route('**/api/system/status',route=>route.fulfill({json:{version,desktop:{supported:true,trayRunning:true},update:{phase:'complete',version,updatedAt:'2026-09-17T10:00:00Z',locked:false}}}));
+ await page.goto('/');await expect(page.locator('#updateNotice')).toBeVisible();await expect(page.locator('#updateNoticeText')).toContainText('已更新到 '+version);
+ await page.locator('#dismissUpdateNotice').click();await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('#updateNotice')).toBeHidden();
+});
 test.beforeEach(async({context})=>{
   await context.addInitScript(()=>{if(!localStorage.getItem('gp-last-visit-v1'))localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'demo',projectId:''}));});
 });
