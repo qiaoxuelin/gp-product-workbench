@@ -52,6 +52,12 @@ async function google(method,suffix,body,profile=config) {
   return result;
 }
 const monitor=require('./review-monitor').createMonitor({file:path.join(DATA,'review-monitor.json'),profiles:()=>settings.profiles,listReleases:(profile,track)=>google('GET','/tracks/'+encodeURIComponent(track)+'/releases',undefined,profile)});
+const notifications=require('./feishu-notifications').createNotifier({file:path.join(DATA,'feishu-notifications.json'),protect:Cred.protect});
+async function checkReview(id){
+  const result=await monitor.check(id),profile=settings.profiles.find(p=>p.id===id);
+  if(profile)await notifications.process(profile,result.events);
+  return result;
+}
 function packageFor(mode){if(!['demo','live'].includes(mode))throw Error('请选择演示或真实模式');if(mode==='demo')return 'com.example.demo';if(!config.packageName)throw Error('请先设置应用包名');return config.packageName;}
 async function getProduct(mode,id) {
   if(mode==='demo')return C.clone(demo.find(p=>p.productId===id)||null);
@@ -214,9 +220,13 @@ async function route(url,b) {
   if(url==='/api/monitor/summary')return {projects:monitor.summary()};
   if(url.startsWith('/api/monitor/')){
     if(b.mode!=='live'||!config.id)throw Error('审核监控需要切换到已配置授权的真实项目');
+    if(url==='/api/monitor/feishu/status')return notifications.status(config);
+    if(url==='/api/monitor/feishu/config')return notifications.configure(config,b);
+    if(url==='/api/monitor/feishu/test')return notifications.test(config);
+    if(url==='/api/monitor/feishu/retry')return notifications.retry(config,b.id);
     if(url==='/api/monitor/status')return monitor.status(config.id);
     if(url==='/api/monitor/config')return monitor.configure(config.id,b);
-    if(url==='/api/monitor/check')return monitor.check(config.id);
+    if(url==='/api/monitor/check')return checkReview(config.id);
     if(url==='/api/monitor/acknowledge')return monitor.acknowledge(config.id);
   }
   if(url.startsWith('/api/finance/')){
@@ -342,7 +352,7 @@ if(require.main===module){
   const monitorTimer=setInterval(async()=>{
     if(busy||monitorChecking||updater.isActive())return;
     const id=monitor.due();if(!id)return;
-    monitorChecking=true;try{await monitor.check(id);}catch(e){console.error('Review monitor:',e.message);}finally{monitorChecking=false;}
+    monitorChecking=true;try{await checkReview(id);}catch(e){console.error('Review monitor:',e.message);}finally{monitorChecking=false;}
   },30000);monitorTimer.unref();server.on('close',()=>clearInterval(monitorTimer));
 }
 module.exports={server,projectContains,checkTransitions};

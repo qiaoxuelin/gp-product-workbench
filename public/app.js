@@ -491,6 +491,35 @@ function financeDialog(){
 const reviewLabels={DRAFT:'草稿',NOT_SENT_FOR_REVIEW:'待送审',IN_REVIEW:'审核中',APPROVED_NOT_PUBLISHED:'通过待发布',NOT_APPROVED:'审核未通过',PUBLISHED:'已发布',UNSPECIFIED:'未知状态'};
 const reviewLabel=state=>reviewLabels[String(state).replace(/^RELEASE_LIFECYCLE_STATE_/,'')]||'未知状态（'+state+'）';
 const reviewTime=value=>value?new Date(value).toLocaleString():'尚未检查';
+
+async function feishuDialog(){
+  const state=await job(()=>api('monitor/feishu/status',{mode}),'正在读取飞书通知配置…');
+  modal('飞书群通知 · '+settings.current.name,'<p>为当前项目配置群机器人。启用后仅发送新检测到的状态变化；首次审核查询建立基线，不补发历史状态。</p><div class="form-grid">'+
+    '<label class="checkline wide"><input type="checkbox" id="feishuEnabled" '+(state.enabled?'checked':'')+'>启用飞书自动通知</label>'+
+    '<label class="field wide">机器人 Webhook<input id="feishuWebhook" type="password" autocomplete="new-password" placeholder="'+(state.hasWebhook?'已加密保存，留空保留；填写新地址可替换':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label>'+
+    '<label class="field wide">签名校验密钥（可选）<input id="feishuSecret" type="password" autocomplete="new-password" placeholder="'+(state.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label>'+
+    '<label class="checkline wide"><input id="feishuClearSecret" type="checkbox">清除已保存的签名密钥（机器人关闭签名时使用）</label>'+
+    '<fieldset class="wide"><legend>通知时机</legend><label class="checkline"><input id="feishuApproved" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED')?'checked':'')+'>审核通过，等待发布</label><label class="checkline"><input id="feishuPublished" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_PUBLISHED')?'checked':'')+'>已经发布</label></fieldset></div>'+
+    '<p class="help">本机加密保存 Webhook 和密钥，不回显。启用通知也需要在上一页启用审核监控，并保持本机后台服务运行。</p>'+
+    '<details><summary>如何准备飞书机器人？</summary><ol><li>在接收通知的飞书群中打开“设置 → 群机器人 → 添加机器人 → 自定义机器人”。</li><li>复制 Webhook 到上方；若开启签名校验，一并填写签名密钥。</li><li>若使用关键词限制，添加关键词 PlayBatch。若使用 IP 白名单，需允许本机网络的出口 IP。</li><li>保存后点击测试通知，在群里确认收到。</li></ol><p><a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot" target="_blank" rel="noreferrer">飞书官方配置指南 ↗</a></p></details>'+
+    '<div class="finance-actions"><button id="feishuSave">保存通知设置</button><button id="feishuTest">发送测试通知到群</button></div><div id="feishuResults"></div>',
+    [{label:'返回审核监控',run:reviewMonitorDialog},{label:'关闭',run:close}]);
+  const draw=s=>{
+    const names={pending:'待发送',sending:'发送中',sent:'已发送',failed:'发送失败',uncertain:'结果不明'};
+    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+esc(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
+    s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+esc(d.text)+'</pre>',[{label:'返回',run:feishuDialog},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode,id:d.id}),'正在重试发送…');await feishuDialog();}}]));});
+  };
+  draw(state);
+  bind('feishuSave',async()=>{
+    const states=[];if($('feishuApproved').checked)states.push('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED');if($('feishuPublished').checked)states.push('RELEASE_LIFECYCLE_STATE_PUBLISHED');
+    const payload={mode,enabled:$('feishuEnabled').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
+    const result=await job(()=>api('monitor/feishu/config',payload),'正在加密保存通知设置…');
+    $('feishuWebhook').value='';$('feishuSecret').value='';$('feishuClearSecret').checked=false;
+    $('feishuWebhook').placeholder=result.hasWebhook?'已加密保存，留空保留':'请输入 Webhook';$('feishuSecret').placeholder=result.hasSecret?'已保存，留空保留':'可选签名密钥';draw(result);status('飞书通知设置已保存');
+  });
+  bind('feishuTest',async()=>{const result=await job(()=>api('monitor/feishu/test',{mode}),'正在向已保存的飞书群发送测试通知…');draw(result);status(result.deliveries[0]?.status==='sent'?'测试通知已发送，请查看飞书群':'测试未确认成功，请查看发送记录',result.deliveries[0]?.status!=='sent');});
+}
+
 async function reviewMonitorDialog(){
   if(mode!=='live'){modal('应用审核监控','<p>请先切换到真实项目并保存服务账号授权，再查看应用版本的审核与发布状态。</p>',[{label:'关闭',run:close}]);return;}
   const state=await job(()=>api('monitor/status',{mode}),'正在读取审核监控配置…');
@@ -498,7 +527,7 @@ async function reviewMonitorDialog(){
   modal('应用审核监控 · '+settings.current.name,'<p>监控应用版本：审核中、通过待发布、审核未通过、已发布。首次检查建立基线，后续变化会记录并显示在侧栏。</p><p class="help">本机后台服务运行时持续检查，关闭浏览器也会检查；停止工具或电脑休眠期间暂停。这里不会自动提交审核或发布版本。</p>'+
     '<div class="form-grid"><label class="checkline wide"><input id="reviewEnabled" type="checkbox" '+(state.enabled?'checked':'')+'>启用此项目的后台监控</label><label class="field">检查间隔<select id="reviewInterval">'+[5,15,30,60].map(n=>'<option value="'+n+'" '+(state.intervalMinutes===n?'selected':'')+'>'+n+' 分钟</option>').join('')+'</select></label>'+multiMarkup('reviewTracks','发布轨道')+
     '<details class="wide"><summary>自定义封闭测试轨道</summary><p class="help">如使用自定义轨道，填写 Play Console 中的轨道 ID 并添加。</p><input id="reviewCustomTrack" aria-label="自定义轨道 ID"><button id="reviewAddTrack">添加轨道</button></details></div>'+
-    '<div class="finance-actions"><button id="reviewSave">保存监控设置</button><button id="reviewCheck" class="primary">保存并立即检查</button><button id="reviewRead">标记已读</button></div><div id="reviewResults"></div><p class="help">“已发布”不等于全量发布，也可能是分阶段或暂停后可恢复的版本。无返回结果或版本从列表消失不代表被拒绝。</p><p><a href="https://play.google.com/console" target="_blank" rel="noreferrer">打开 Play Console ↗</a></p>',
+    '<div class="finance-actions"><button id="reviewSave">保存监控设置</button><button id="reviewCheck" class="primary">保存并立即检查</button><button id="reviewRead">标记已读</button><button id="reviewFeishu">飞书通知</button></div><div id="reviewResults"></div><p class="help">“已发布”不等于全量发布，也可能是分阶段或暂停后可恢复的版本。无返回结果或版本从列表消失不代表被拒绝。</p><p><a href="https://play.google.com/console" target="_blank" rel="noreferrer">打开 Play Console ↗</a></p>',
     [{label:'关闭',run:close}]);
   initMulti('reviewTracks',choices,state.tracks,null);
   const draw=result=>{
@@ -514,6 +543,7 @@ async function reviewMonitorDialog(){
   const saveReview=()=>api('monitor/config',{mode,enabled:$('reviewEnabled').checked,intervalMinutes:Number($('reviewInterval').value),tracks:$('reviewTracks').selectedValues()});
   bind('reviewSave',async()=>{const result=await job(saveReview,'正在保存监控设置…');draw(result);status(result.enabled?'后台审核监控已开启':'后台审核监控已关闭');});
   bind('reviewCheck',async()=>{const result=await job(async()=>{await saveReview();return api('monitor/check',{mode});},'正在查询 Google 审核与发布状态…');draw(result);status(result.error?'检查未成功，详情见窗口':'审核状态已更新',!!result.error);await refreshReviewBadge();});
+  bind('reviewFeishu',feishuDialog);
   bind('reviewRead',async()=>{draw(await api('monitor/acknowledge',{mode}));await refreshReviewBadge();});
 }
 async function refreshReviewBadge(){

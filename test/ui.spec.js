@@ -512,3 +512,19 @@ test('review monitor config shows approval separate from publication and retains
   expect(request.profileId).toBe('review');expect(request.tracks).toEqual(['production']);
   await expect(page.locator('#reviewResults')).toContainText('通过待发布');
 });
+
+test('Feishu notification settings hide secrets and only send a test on explicit click',async({page})=>{
+  const p={id:'notify',name:'Notify App',packageName:'com.example.notify',hasCredential:true};
+  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));
+  await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'notify'})));
+  await page.route('**/api/products',route=>route.fulfill({json:{products:[]}}));
+  await page.route('**/api/monitor/status',route=>route.fulfill({json:{enabled:true,tracks:['production'],intervalMinutes:5,snapshot:[],events:[],lastCheck:null,error:''}}));
+  const state={enabled:false,states:['RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED','RELEASE_LIFECYCLE_STATE_PUBLISHED'],hasWebhook:false,hasSecret:false,deliveries:[]};let tests=0,payload;
+  await page.route('**/api/monitor/feishu/status',route=>route.fulfill({json:state}));
+  await page.route('**/api/monitor/feishu/config',route=>{payload=route.request().postDataJSON();return route.fulfill({json:{...state,hasWebhook:true,enabled:true}});});
+  await page.route('**/api/monitor/feishu/test',route=>{tests++;return route.fulfill({json:{...state,deliveries:[{id:'test',status:'sent',kind:'test',text:'PlayBatch 测试通知',sentAt:'2026-09-17T00:00:00Z'}]}});});
+  await page.goto('/');await page.locator('#reviewMonitor').click();await page.locator('#reviewFeishu').click();
+  await page.locator('#feishuEnabled').check();await page.locator('#feishuWebhook').fill('https://open.feishu.cn/open-apis/bot/v2/hook/11111111-2222-3333-4444-555555555555');
+  await page.locator('#feishuSave').click();await expect(page.locator('#feishuWebhook')).toHaveValue('');expect(tests).toBe(0);expect(payload.profileId).toBe('notify');
+  await page.locator('#feishuTest').click();await expect(page.locator('#feishuResults')).toContainText('已发送');expect(tests).toBe(1);
+});
