@@ -498,6 +498,7 @@ const reviewLabels={DRAFT:'草稿',NOT_SENT_FOR_REVIEW:'待送审',IN_REVIEW:'�
 const reviewLabel=state=>reviewLabels[String(state).replace(/^RELEASE_LIFECYCLE_STATE_/,'')]||'未知状态（'+state+'）';
 const reviewTime=value=>value?new Date(value).toLocaleString():'尚未检查';
 
+const feishuText=text=>esc(String(text).replaceAll('<at user_id="all">所有人</at>','@全体成员'));
 const REVIEW_PROJECT_KEY='gp-review-project-v1';
 let reviewProjectId='';
 async function feishuDialog(profileId=reviewProjectId){
@@ -509,20 +510,22 @@ async function feishuDialog(profileId=reviewProjectId){
     '<label class="field wide">机器人 Webhook<input id="feishuWebhook" type="password" autocomplete="new-password" placeholder="'+(state.hasWebhook?'已加密保存，留空保留；填写新地址可替换':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label>'+
     '<label class="field wide">签名校验密钥（可选）<input id="feishuSecret" type="password" autocomplete="new-password" placeholder="'+(state.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label>'+
     '<label class="checkline wide"><input id="feishuClearSecret" type="checkbox">清除已保存的签名密钥（机器人关闭签名时使用）</label>'+
-    '<fieldset class="wide"><legend>通知时机</legend><label class="checkline"><input id="feishuApproved" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED')?'checked':'')+'>审核通过，等待发布</label><label class="checkline"><input id="feishuPublished" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_PUBLISHED')?'checked':'')+'>已经发布</label></fieldset></div>'+
+    '<fieldset class="wide"><legend>通知时机</legend><label class="checkline"><input id="feishuApproved" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED')?'checked':'')+'>审核通过，等待发布</label><label class="checkline"><input id="feishuPublished" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_PUBLISHED')?'checked':'')+'>已经发布</label></fieldset>'+
+    '<label class="checkline wide"><input id="feishuMentionAll" type="checkbox" '+(state.mentionAll?'checked':'')+'>通知时 @全体成员</label></div>'+
+    '<p class="help">@全体成员默认关闭，按项目保存。开启后，自动通知和测试通知都会提醒全体成员；群内需允许机器人 @所有人。测试使用已保存设置；重试保留原消息的 @ 提醒。</p>'+
     '<p class="help">本机加密保存 Webhook 和密钥，不回显。启用通知也需要在上一页启用审核监控，并保持本机后台服务运行。</p>'+
     '<details><summary>如何准备飞书机器人？</summary><ol><li>在接收通知的飞书群中打开“设置 → 群机器人 → 添加机器人 → 自定义机器人”。</li><li>复制 Webhook 到上方；若开启签名校验，一并填写签名密钥。</li><li>若使用关键词限制，添加关键词 PlayBatch。若使用 IP 白名单，需允许本机网络的出口 IP。</li><li>保存后点击测试通知，在群里确认收到。</li></ol><p><a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot" target="_blank" rel="noreferrer">飞书官方配置指南 ↗</a></p></details>'+
     '<div class="finance-actions"><button id="feishuSave">保存通知设置</button><button id="feishuTest">发送测试通知到群</button></div><div id="feishuResults"></div>',
     [{label:'返回审核监控',run:()=>reviewMonitorDialog(profileId)},{label:'关闭',run:close}]);
   const draw=s=>{
     const names={pending:'待发送',sending:'发送中',sent:'已发送',failed:'发送失败',uncertain:'结果不明'};
-    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+esc(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
-    s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+esc(d.text)+'</pre>',[{label:'返回',run:()=>feishuDialog(profileId)},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode:'live',profileId,id:d.id}),'正在重试发送…');await feishuDialog(profileId);}}]));});
+    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+feishuText(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
+    s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+feishuText(d.text)+'</pre>',[{label:'返回',run:()=>feishuDialog(profileId)},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode:'live',profileId,id:d.id}),'正在重试发送…');await feishuDialog(profileId);}}]));});
   };
   draw(state);
   bind('feishuSave',async()=>{
     const states=[];if($('feishuApproved').checked)states.push('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED');if($('feishuPublished').checked)states.push('RELEASE_LIFECYCLE_STATE_PUBLISHED');
-    const payload={mode:'live',profileId,enabled:$('feishuEnabled').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
+    const payload={mode:'live',profileId,enabled:$('feishuEnabled').checked,mentionAll:$('feishuMentionAll').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
     const result=await job(()=>api('monitor/feishu/config',payload),'正在加密保存通知设置…');
     $('feishuWebhook').value='';$('feishuSecret').value='';$('feishuClearSecret').checked=false;
     $('feishuWebhook').placeholder=result.hasWebhook?'已加密保存，留空保留':'请输入 Webhook';$('feishuSecret').placeholder=result.hasSecret?'已保存，留空保留':'可选签名密钥';draw(result);status('飞书通知设置已保存');

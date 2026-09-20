@@ -537,12 +537,18 @@ test('Feishu notification settings hide secrets and only send a test on explicit
   await page.route('**/api/monitor/status',route=>route.fulfill({json:{enabled:true,tracks:['production'],intervalMinutes:5,snapshot:[],events:[],lastCheck:null,error:''}}));
   const state={enabled:false,states:['RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED','RELEASE_LIFECYCLE_STATE_PUBLISHED'],hasWebhook:false,hasSecret:false,deliveries:[]};let tests=0,payload;
   await page.route('**/api/monitor/feishu/status',route=>route.fulfill({json:state}));
-  await page.route('**/api/monitor/feishu/config',route=>{payload=route.request().postDataJSON();return route.fulfill({json:{...state,hasWebhook:true,enabled:true}});});
-  await page.route('**/api/monitor/feishu/test',route=>{tests++;return route.fulfill({json:{...state,deliveries:[{id:'test',status:'sent',kind:'test',text:'PlayBatch 测试通知',sentAt:'2026-09-17T00:00:00Z'}]}});});
+  await page.route('**/api/monitor/feishu/config',route=>{payload=route.request().postDataJSON();Object.assign(state,{hasWebhook:true,enabled:payload.enabled,mentionAll:payload.mentionAll});return route.fulfill({json:state});});
+  await page.route('**/api/monitor/feishu/test',route=>{tests++;return route.fulfill({json:{...state,deliveries:[{id:'test',status:'sent',kind:'test',text:(state.mentionAll?'<at user_id="all">所有人</at>\n':'')+'PlayBatch 测试通知',sentAt:'2026-09-17T00:00:00Z'}]}});});
   await page.goto('/');await page.locator('#reviewMonitor').click();await page.locator('#reviewFeishu').click();
+  await expect(page.locator('#feishuMentionAll')).not.toBeChecked();
+  await page.locator('#feishuMentionAll').check();
   await page.locator('#feishuEnabled').check();await page.locator('#feishuWebhook').fill('https://open.feishu.cn/open-apis/bot/v2/hook/11111111-2222-3333-4444-555555555555');
-  await page.locator('#feishuSave').click();await expect(page.locator('#feishuWebhook')).toHaveValue('');expect(tests).toBe(0);expect(payload.profileId).toBe('notify');
+  await page.locator('#feishuSave').click();await expect(page.locator('#feishuWebhook')).toHaveValue('');expect(tests).toBe(0);expect(payload.profileId).toBe('notify');expect(payload.mentionAll).toBe(true);
+  await page.getByRole('button',{name:'返回审核监控',exact:true}).click();await page.locator('#reviewFeishu').click();await expect(page.locator('#feishuMentionAll')).toBeChecked();
   await page.locator('#feishuTest').click();await expect(page.locator('#feishuResults')).toContainText('已发送');expect(tests).toBe(1);
+  await expect(page.locator('#feishuResults')).toContainText('@全体成员');await expect(page.locator('#feishuResults')).not.toContainText('<at ');
+  await page.locator('#feishuMentionAll').uncheck();await page.locator('#feishuSave').click();await expect(page.locator('#feishuResults')).toContainText('暂无发送记录');expect(payload.mentionAll).toBe(false);expect(tests).toBe(1);
+  await page.locator('#feishuTest').click();await expect(page.locator('#feishuResults')).toContainText('已发送');await expect(page.locator('#feishuResults')).not.toContainText('@全体成员');expect(tests).toBe(2);
 });
 
 test('review project selection is independent, persisted and used by Feishu',async({page})=>{

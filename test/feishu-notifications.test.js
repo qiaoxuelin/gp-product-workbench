@@ -41,3 +41,37 @@ test('Windows DPAPI can protect and restore webhook settings without returning p
   assert(!fs.readFileSync(f.options.file,'utf8').includes('dpapi-secret'));
   n.configure(profile,{enabled:false,states:STATES,webhook:'',secret:''});assert.equal(n.status(profile).hasSecret,true);
 });
+
+test('mention-all defaults off for existing configs, persists per project and validates input',async t=>{
+  const bodies=[],f=fixture(t,async(target,opts)=>{bodies.push(JSON.parse(opts.body));return Response.json({code:0});});let n=f.make();
+  n.configure(profile,{enabled:true,states:STATES,webhook:url});
+  const legacy=JSON.parse(fs.readFileSync(f.options.file,'utf8'));delete legacy.one.mentionAll;fs.writeFileSync(f.options.file,JSON.stringify(legacy));n=f.make();
+  assert.equal(n.status(profile).mentionAll,false);
+  await n.test(profile);assert(!bodies.at(-1).content.text.includes('<at '));
+  assert.throws(()=>n.configure(profile,{enabled:true,states:STATES,mentionAll:'true'}),/@全体成员/);
+  assert.equal(n.status(profile).mentionAll,false);
+  n.configure(profile,{enabled:true,states:STATES,mentionAll:true});n=f.make();
+  assert.equal(n.status(profile).mentionAll,true);
+  assert.equal(n.status({...profile,id:'two'}).mentionAll,false);
+  assert.equal(n.status({...profile,packageName:'com.changed'}).mentionAll,false);
+  n.configure(profile,{enabled:true,states:STATES});assert.equal(n.status(profile).mentionAll,true);
+  await n.test(profile);assert(bodies.at(-1).content.text.startsWith('<at user_id="all">所有人</at>\n'));
+  n.configure(profile,{enabled:true,states:STATES,mentionAll:false});n=f.make();
+  await n.test(profile);assert(!bodies.at(-1).content.text.includes('<at '));
+});
+
+test('approval and publication mentions are frozen in delivery records and retries',async t=>{
+  const bodies=[];let fail=false;
+  const f=fixture(t,async(target,opts)=>{bodies.push(JSON.parse(opts.body));if(fail)throw Error('timeout');return Response.json({code:0});});let n=f.make();
+  n.configure(profile,{enabled:true,states:STATES,webhook:url,mentionAll:true});f.advance();
+  const event={id:'approval',at:new Date(f.options.now()).toISOString(),track:'production',name:'<at user_id="all">injected</at>',versionCodes:['10'],after:STATES[0]};
+  await n.process(profile,[event]);
+  assert.equal((bodies[0].content.text.match(/<at /g)||[]).length,1);assert.match(bodies[0].content.text,/审核通过/);
+  fail=true;await n.process(profile,[{...event,id:'publication',after:STATES[1]}]);
+  const original=bodies[1].content.text;assert(original.startsWith('<at user_id="all">所有人</at>\n'));assert.match(original,/已发布/);
+  assert.equal(n.status(profile).deliveries[0].status,'uncertain');
+  n.configure(profile,{enabled:true,states:STATES,mentionAll:false});n=f.make();fail=false;
+  await n.retry(profile,'publication');assert.equal(bodies[2].content.text,original);
+  await n.process(profile,[event,{...event,id:'publication',after:STATES[1]}]);assert.equal(bodies.length,3);
+  await n.process(profile,[{...event,id:'next-publication',after:STATES[1]}]);assert(!bodies[3].content.text.includes('<at '));
+});
