@@ -24,12 +24,14 @@ Copy-Item -LiteralPath (Join-Path $gpExtract "node-$NodeVersion-win-x64\LICENSE"
 $gpResolved=(Resolve-Path -LiteralPath $gpExtract).Path
 if (-not $gpResolved.StartsWith($gpStage+[IO.Path]::DirectorySeparatorChar)) { throw 'Unsafe extraction path' }
 Remove-Item -LiteralPath $gpResolved -Recurse -Force
-$gpFiles=@('server.js','desktop-integration.js','diagnostics.js','create-shortcuts.ps1','shortcut-launch.ps1','tray.ps1','desktop-strings.json','playbatch.ico','创建快捷方式.cmd','core.js','credentials.js','finance.js','review-monitor.js','feishu-notifications.js','listings-workbook.js','updater.js','update-runner.js','update-install.ps1','launch-target.ps1','google-api-discovery.json','package.json','README.md','GOOGLE_AUTH_GUIDE.html','start.ps1','stop.ps1','start.cmd','stop.cmd','启动工具.cmd','停止工具.cmd','使用说明.txt')
+$gpFiles=@('server.js','workspace-projects.js','apple-client.js','apple-credentials.js','apple-products.js','apple-workspace.js','google-client.js','google-product-rules.js','google-products.js','json-store.js','desktop-integration.js','diagnostics.js','create-shortcuts.ps1','shortcut-launch.ps1','tray.ps1','desktop-strings.json','playbatch.ico','创建快捷方式.cmd','core.js','credentials.js','finance.js','review-monitor.js','feishu-notifications.js','listings-workbook.js','updater.js','update-runner.js','update-install.ps1','launch-target.ps1','google-api-discovery.json','package.json','README.md','GOOGLE_AUTH_GUIDE.html','start.ps1','stop.ps1','start.cmd','stop.cmd','启动工具.cmd','停止工具.cmd','使用说明.txt')
 foreach ($gpFile in $gpFiles) { Copy-Item -LiteralPath (Join-Path $gpRoot $gpFile) -Destination $gpStage }
 New-Item -ItemType Directory -Path (Join-Path $gpStage 'public') | Out-Null
-foreach ($gpFile in @('app.js','index.html','style.css')) { Copy-Item -LiteralPath (Join-Path $gpRoot "public\$gpFile") -Destination (Join-Path $gpStage 'public') }
+foreach ($gpFile in @('app.js','index.html','style.css','apple.html','apple.js','workspace-shell.js','system-tools.js','playbatch-icon-v1.png')) { Copy-Item -LiteralPath (Join-Path $gpRoot "public\$gpFile") -Destination (Join-Path $gpStage 'public') }
 New-Item -ItemType Directory -Path (Join-Path $gpStage 'vendor') | Out-Null
 foreach ($gpFile in @('xlsx.full.min.js','SHEETJS-LICENSE.txt','README.md')) { Copy-Item -LiteralPath (Join-Path $gpRoot "vendor\$gpFile") -Destination (Join-Path $gpStage 'vendor') }
+New-Item -ItemType Directory -Path (Join-Path $gpStage 'docs') | Out-Null
+foreach ($gpFile in @('apple-iap.md','architecture.md')) { Copy-Item -LiteralPath (Join-Path $gpRoot "docs\$gpFile") -Destination (Join-Path $gpStage 'docs') }
 $gpZip=Join-Path $gpDist ($gpName+'.zip')
 if (Test-Path -LiteralPath $gpZip) { throw 'Release archive already exists; increment version or archive it first.' }
 Compress-Archive -Path (Join-Path $gpStage '*') -DestinationPath $gpZip -CompressionLevel Optimal

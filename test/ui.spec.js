@@ -1,8 +1,10 @@
 const crypto=require('node:crypto');
 const {test,expect}=require('@playwright/test');
+async function mockProjects(page,platform,profiles){await page.route('**/api/projects',r=>r.fulfill({json:{revision:'fixture',profiles:{google:platform==='google'?profiles:[],apple:platform==='apple'?profiles:[]},projects:profiles.map(p=>({id:platform+':'+p.id,name:p.name,googleId:platform==='google'?p.id:'',appleId:platform==='apple'?p.id:''}))}}));}
+
 test('support exports safe diagnostics and creates shortcuts through its explicit button',async({page})=>{
  let created=false;await page.route('**/api/system/shortcuts',route=>{created=true;return route.fulfill({json:{created:true}});});
- await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+ await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
  await page.locator('#support').click();await expect(page.locator('#dialogTitle')).toHaveText('帮助与诊断');
  await page.screenshot({path:'data/ui-support.png',fullPage:true,animations:'disabled'});
  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'导出诊断信息',exact:true}).click();const file=await pending;
@@ -13,7 +15,7 @@ test('support exports safe diagnostics and creates shortcuts through its explici
 test('successful update is visible after reload and can be dismissed persistently',async({page})=>{
  const version=require('../package.json').version;
  await page.route('**/api/system/status',route=>route.fulfill({json:{version,desktop:{supported:true,trayRunning:true},update:{phase:'complete',version,updatedAt:'2026-09-17T10:00:00Z',locked:false}}}));
- await page.goto('/');await expect(page.locator('#updateNotice')).toBeVisible();await expect(page.locator('#updateNoticeText')).toContainText('已更新到 '+version);
+ await page.goto('/?demo=1');await expect(page.locator('#updateNotice')).toBeVisible();await expect(page.locator('#updateNoticeText')).toContainText('已更新到 '+version);
  await page.locator('#dismissUpdateNotice').click();await page.reload();await expect(page.locator('#products')).toContainText('coins_100');await expect(page.locator('#updateNotice')).toBeHidden();
 });
 test.beforeEach(async({context})=>{
@@ -23,7 +25,7 @@ test('browser workflow: edit prices, commit demo, copy, create and isolate proje
   const pair=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
   const fixture={type:'service_account',client_email:'ui-test@example.iam.gserviceaccount.com',private_key:pair.privateKey.export({type:'pkcs8',format:'pem'})};
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('/');
+  await page.goto('/?demo=1');
   await expect(page.locator('#total')).toHaveText('3');
   await page.screenshot({path:'data/ui-home.png',fullPage:true});
   await page.getByRole('checkbox',{name:'选择 coins_100',exact:true}).check();
@@ -54,14 +56,15 @@ test('browser workflow: edit prices, commit demo, copy, create and isolate proje
   await expect(page.locator('#total')).toHaveText('5');
   await expect(page.locator('#dirtyCount')).toHaveText('2');
   await page.reload();await expect(page.locator('#dirtyCount')).toHaveText('2');
-  await page.locator('#newProject').click();
-  await expect(page.locator('#dialogTitle')).toHaveText('新建项目');
+  await page.locator('#demoExit').click();
+  await page.locator('#workspaceCreate').click();await page.locator('#workspaceName').fill('测试项目 A');await page.getByRole('button',{name:'保存项目',exact:true}).click();await page.getByRole('button',{name:'配置 Google Play',exact:true}).click();
+  await expect(page.locator('#dialogTitle')).toHaveText('Google Play 应用与授权');
   await page.locator('#profileName').fill('测试项目 A');
   await page.locator('#profilePackage').fill('com.example.appa');
   await page.locator('#credentialFile').setInputFiles({name:'test-service-account.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture))});
   // Simulate a tab retaining the session token from before a server restart.
   await page.evaluate(()=>{token='expired-before-restart';});
-  await page.getByRole('button',{name:/^(保存|创建)并切换到此项目$/}).click();
+  await page.getByRole('button',{name:'保存 Google Play 设置'}).click();
   await expect(page.locator('#package')).toHaveText('com.example.appa');
   await expect(page.locator('#total')).toHaveText('0');
   await page.locator('#settings').click();
@@ -72,7 +75,7 @@ test('browser workflow: edit prices, commit demo, copy, create and isolate proje
   await page.getByText('或直接粘贴 JSON 内容',{exact:true}).click();
   fixture.client_email='ui-replacement@example.iam.gserviceaccount.com';
   await page.locator('#credentialJson').fill(JSON.stringify(fixture));
-  await page.getByRole('button',{name:/^(保存|创建)并切换到此项目$/}).click();
+  await page.getByRole('button',{name:'保存 Google Play 设置'}).click();
   await page.locator('#settings').click();
   await expect(page.locator('#credentialStatus')).toContainText(fixture.client_email);
   await expect(page.locator('#credentialJson')).toHaveValue('');
@@ -84,19 +87,18 @@ test('browser workflow: edit prices, commit demo, copy, create and isolate proje
   await page.getByRole('textbox',{name:'商品描述',exact:true}).fill('仅用于本地草稿验证');
   await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await expect(page.locator('#dirtyCount')).toHaveText('1');
-  await page.locator('#settings').click();
-  await page.locator('#addProject').click();
-  await expect(page.locator('#dialogTitle')).toHaveText('新建项目');
-  await expect(page.locator('#profileName')).toHaveValue('');
+  await page.locator('#workspaceCreate').click();await page.locator('#workspaceName').fill('测试项目 B');await page.getByRole('button',{name:'保存项目',exact:true}).click();await page.getByRole('button',{name:'配置 Google Play',exact:true}).click();
+  await expect(page.locator('#dialogTitle')).toHaveText('Google Play 应用与授权');
+  await expect(page.locator('#profileName')).toHaveValue('测试项目 B');
   await expect(page.locator('#profilePackage')).toHaveValue('');
   await expect(page.locator('#credentialStatus')).toContainText('尚未配置');
   await page.locator('#profileName').fill('测试项目 B');
   await page.locator('#profilePackage').fill('com.example.appb');
-  await page.getByRole('button',{name:/^(保存|创建)并切换到此项目$/}).click();
+  await page.getByRole('button',{name:'保存 Google Play 设置'}).click();
   await expect(page.locator('#package')).toHaveText('com.example.appb');
   await expect(page.locator('#project option')).toHaveCount(2);
   await expect(page.locator('#total')).toHaveText('0');
-  await page.locator('#project').selectOption({label:'测试项目 A'});
+  await page.locator('#workspaceProject').selectOption({label:'测试项目 A'});
   await expect(page.locator('#total')).toHaveText('1');
   await expect(page.locator('#products')).toContainText('project_a_only');
   await page.reload();
@@ -109,7 +111,7 @@ test('browser workflow: edit prices, commit demo, copy, create and isolate proje
   await expect(secondTab.locator('#package')).toHaveText('com.example.appa');
   await expect(secondTab.locator('#products')).toContainText('project_a_only');
   await secondTab.close();
-  await page.locator('#mode').selectOption('demo');
+  await page.locator('#support').click();await page.getByRole('button',{name:'体验演示',exact:true}).click();
   await expect(page.locator('#total')).toHaveText('5');
   await expect(page.locator('#dirtyCount')).toHaveText('2');
   await page.reload();
@@ -122,7 +124,7 @@ test('browser workflow: edit prices, commit demo, copy, create and isolate proje
 });
 
 test('preview immediately shows progress, then displays disabled API error above the fold without losing drafts',async({page})=>{
-  await page.goto('/');
+  await page.goto('/?demo=1');
   await expect(page.locator('#total')).toHaveText('3');
   await page.locator('#preview').click();
   await expect(page.locator('#dialogTitle')).toHaveText('操作未完成');
@@ -154,7 +156,7 @@ test('preview immediately shows progress, then displays disabled API error above
 });
 
 test('all-region conversion adds missing countries and preserves option settings until user applies draft',async({page})=>{
-  await page.goto('/');
+  await page.goto('/?demo=1');
   await expect(page.locator('#total')).toHaveText('3');
   await page.getByRole('checkbox',{name:'选择 coins_100',exact:true}).check();
   await page.route('**/api/convert',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
@@ -188,7 +190,7 @@ test('all-region conversion adds missing countries and preserves option settings
 });
 
 test('multilingual template download and upload preview preserves prices and existing languages',async({page})=>{
-  await page.goto('/');
+  await page.goto('/?demo=1');
   await expect(page.locator('#total')).toHaveText('3');
   await page.getByRole('checkbox',{name:'选择 coins_100',exact:true}).check();
   await page.locator('#languages').click();
@@ -226,7 +228,7 @@ test('multilingual template download and upload preview preserves prices and exi
 });
 
 test('selection controls save language and regional price changes',async({page})=>{
-  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.goto('/?demo=1');await expect(page.locator('#total')).toHaveText('3');
   await page.locator('[data-edit="coins_100"]').click();
   await page.locator('#addLocale').click();
   await page.locator('select[data-k="languageCode"]').last().selectOption('ja-JP');
@@ -247,7 +249,7 @@ test('selection controls save language and regional price changes',async({page})
 });
 
 test('catalog filters retain explicit selection scope and region search preserves hidden values',async({page})=>{
-  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.goto('/?demo=1');await expect(page.locator('#total')).toHaveText('3');
   await expect(page.locator('#price')).toBeDisabled();
   await page.locator('[data-select="coins_100"]').check();
   await page.locator('#search').fill('REMOVE_ADS');
@@ -276,7 +278,7 @@ test('catalog filters retain explicit selection scope and region search preserve
 });
 
 test('single product template preserves unsaved edits and returns to editor before saving',async({page})=>{
-  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.goto('/?demo=1');await expect(page.locator('#total')).toHaveText('3');
   await page.locator('[data-select="coins_550"]').check();
   await page.locator('[data-edit="coins_100"]').click();
   await page.locator('[data-k="price"]').first().fill('3.99');
@@ -308,7 +310,7 @@ test('single product template preserves unsaved edits and returns to editor befo
 });
 
 test('legacy Excel CSV decodes GBK and UTF16 without losing Chinese text',async({page})=>{
-  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.goto('/?demo=1');await expect(page.locator('#total')).toHaveText('3');
   await page.locator('[data-select="coins_100"]').check();await page.locator('#languages').click();
   const gbk=Buffer.concat([Buffer.from('productId,languageCode,title,description\ncoins_100,zh-CN,'),Buffer.from([0xd6,0xd0,0xce,0xc4]),Buffer.from(','),Buffer.from([0xc3,0xe8,0xca,0xf6])]);
   await page.locator('#languageFile').setInputFiles({name:'gbk.csv',mimeType:'text/csv',buffer:gbk});
@@ -328,7 +330,7 @@ test('legacy Excel CSV decodes GBK and UTF16 without losing Chinese text',async(
   await expect(page.locator('[role=alert]')).toContainText('损坏字符');
 });
 test('new product can be created and activated in one confirmed submission',async({page})=>{
-  await page.goto('/');await expect(page.locator('#total')).toHaveText('3');
+  await page.goto('/?demo=1');await expect(page.locator('#total')).toHaveText('3');
   await page.locator('[data-select="coins_100"]').check();await page.locator('#copy').click();
   await page.locator('#copyIds').fill('new_active');
   await page.getByRole('button',{name:'生成商品草稿'}).click();
@@ -345,7 +347,7 @@ test('new product can be created and activated in one confirmed submission',asyn
 });
 
 test('status filters combine with search and distinguish draft active and inactive products',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.evaluate(()=>{
     draft=['coins_100','coins_550','remove_ads'].map(id=>draft.find(p=>p.productId===id));
     draft[0].purchaseOptions[0].state='DRAFT';
@@ -368,7 +370,7 @@ test('status filters combine with search and distinguish draft active and inacti
 });
 
 test('file preview refreshes encoding and reports malformed CSV before import',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('#languages').click();
   const bytes=Buffer.concat([Buffer.from('productId,languageCode,title,description\ncoins_100,zh-CN,'),Buffer.from([0xd6,0xd0,0xce,0xc4]),Buffer.from(',text')]);
   await page.locator('#languageFile').setInputFiles({name:'preview.csv',mimeType:'text/csv',buffer:bytes});
@@ -388,7 +390,7 @@ test('file preview refreshes encoding and reports malformed CSV before import',a
 });
 
 test('unfinished result requires remote review and a new confirmation before retry',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   const before=await page.evaluate(()=>structuredClone(base.find(p=>p.productId==='coins_100')));
   await page.locator('[data-select="coins_100"]').check();await page.locator('#price').click();
   await page.locator('#priceValue').fill('2.99');await page.getByRole('button',{name:'计算并应用到草稿'}).click();
@@ -411,7 +413,7 @@ test('unfinished result requires remote review and a new confirmation before ret
 
 test('monthly finance UI saves account report address, downloads original bytes and invalidates changed month',async({page})=>{
   const profile={id:'finance-project',name:'财务测试项目',packageName:'com.example.finance',hasCredential:true,credentialEmail:'finance@example.iam.gserviceaccount.com',financialBucket:''};
-  await page.route('**/api/config',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({profiles:[profile],activeId:profile.id,current:profile})}));
+  await page.route('**/api/config',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({profiles:[profile],activeId:profile.id,current:profile})}));await mockProjects(page,'google',[profile]);
   await page.route('**/api/finance/config',route=>{
     const b=route.request().postDataJSON();expect(b.profileId).toBe(profile.id);expect(b.mode).toBe('live');
     profile.financialBucket=b.bucket.replace(/^gs:\/\//,'').split('/')[0];
@@ -426,13 +428,10 @@ test('monthly finance UI saves account report address, downloads original bytes 
     expect(route.request().postDataJSON().reportId).toBe('report-ticket');
     return route.fulfill({status:200,contentType:'application/zip',body:original});
   });
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.route('**/api/products',r=>r.fulfill({json:{products:[]}}));await page.goto('/');await expect(page.locator('#workspaceManage')).toBeVisible();
   await page.locator('#finance').click();
-  await expect(page.locator('#dialogBody')).toContainText('当前为演示模式');
-  await page.getByRole('button',{name:'关闭',exact:true}).last().click();
-  await page.locator('#mode').selectOption('live');
-  await page.locator('#finance').click();
-  await expect(page.locator('#dialogBody')).toContainText('开发者账号全部应用');
+  await expect(page.locator('#modal')).not.toBeVisible();
+  await expect(page.locator('#featurePanel')).toContainText('开发者账号全部应用');
   await page.locator('#financeBucket').fill('gs://pubsite_prod_rev_finance/earnings/');
   await page.locator('#financeYear').selectOption('2026');await page.locator('#financeMonth').selectOption('08');
   await page.locator('#financeList').click();
@@ -445,14 +444,14 @@ test('monthly finance UI saves account report address, downloads original bytes 
   await page.locator('#financeMonth').selectOption('07');
   await expect(page.locator('#financeFiles')).toContainText('重新读取');
   await expect(page.locator('#financeDownload0')).toHaveCount(0);
-  await page.getByRole('button',{name:'关闭',exact:true}).last().click();
+  page.once('dialog',dialog=>dialog.accept());await page.locator('#catalogFeature').click();
   await page.locator('#finance').click();
   await expect(page.locator('#financeBucket')).toHaveValue('pubsite_prod_rev_finance');
 });
 
 test('update dialog distinguishes source mode and preserves draft when installer fails',async({page})=>{
   await page.route('**/api/update/check',route=>route.fulfill({json:{currentVersion:'0.1.7',version:'0.2.0',available:true,supported:false,page:'https://github.com/qiaoxuelin/gp-product-workbench/releases/tag/v0.2.0',notes:'<script>alert(1)</script>'}}));
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('#update').click();await expect(page.locator('#dialogBody')).toContainText('不支持自动安装');
   await expect(page.getByRole('button',{name:'更新并重启',exact:true})).toHaveCount(0);
   await page.locator('#closeModal').click();
@@ -468,7 +467,7 @@ test('update dialog distinguishes source mode and preserves draft when installer
 });
 
 test('Excel multilingual sheets preview Unicode and errors by sheet before applying',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');await page.locator('[data-select="coins_100"]').check();await page.locator('#languages').click();
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');await page.locator('[data-select="coins_100"]').check();await page.locator('#languages').click();
   const W=require('../listings-workbook'),X=require('../vendor/xlsx.full.min.js');
   const bytes=W.exportWorkbook([{productId:'coins_100',listings:[{languageCode:'zh-TW',title:'金幣',description:'繁體內容'},{languageCode:'ja-JP',title:'コイン',description:'日本語の説明'}]}],['ko-KR']);
   await page.locator('#languageFile').setInputFiles({name:'translations.xlsx',mimeType:W.MIME,buffer:bytes});
@@ -486,7 +485,7 @@ test('Excel multilingual sheets preview Unicode and errors by sheet before apply
 
 test('old backend update endpoint gives restart instructions instead of indefinite loading',async({page})=>{
   await page.route('**/api/update/check',route=>route.fulfill({status:400,json:{error:'未知接口'}}));
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('#update').click();
   await expect(page.locator('#dialogTitle')).toHaveText('检查更新未完成');
   await expect(page.locator('#dialogBody')).toContainText('停止工具.cmd');
@@ -496,7 +495,7 @@ test('old backend update endpoint gives restart instructions instead of indefini
 });
 
 test('discard and reread removes persisted drafts even when storage quota prevents saving snapshots',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('8.88');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await expect(page.locator('#dirtyCount')).toHaveText('1');
   await page.evaluate(()=>{const original=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('gp-workspace-v1:'))throw new DOMException('Quota exceeded','QuotaExceededError');return original.call(this,k,v);};});
@@ -507,7 +506,7 @@ test('discard and reread removes persisted drafts even when storage quota preven
 });
 
 test('selected draft discard updates badge and stays discarded after reload',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('9.99');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await page.locator('[data-select="coins_100"]').check();await page.locator('#discard').click();await page.getByRole('button',{name:'撤销草稿',exact:true}).click();
   await expect(page.locator('#pendingBadge')).toHaveText('0');await expect(page.locator('tr').filter({has:page.locator('[data-select="coins_100"]')})).toContainText('无待提交修改');
@@ -515,7 +514,7 @@ test('selected draft discard updates badge and stays discarded after reload',asy
 });
 test('review monitor config shows approval separate from publication and retains last successful result on error',async({page})=>{
   const p={id:'review',name:'Review App',packageName:'com.example.review',hasCredential:true};let request;
-  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));
+  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));await mockProjects(page,'google',[p]);
   await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'review'})));
   await page.route('**/api/products',route=>route.fulfill({json:{products:[]}}));
   const state={enabled:true,tracks:['production'],intervalMinutes:5,snapshot:[{track:'production',name:'1.0',versionCodes:['10'],state:'RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED'}],events:[],lastCheck:'2026-09-17T00:00:00Z',unread:0,error:''};
@@ -531,7 +530,7 @@ test('review monitor config shows approval separate from publication and retains
 
 test('Feishu notification settings hide secrets and only send a test on explicit click',async({page})=>{
   const p={id:'notify',name:'Notify App',packageName:'com.example.notify',hasCredential:true};
-  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));
+  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));await mockProjects(page,'google',[p]);
   await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'notify'})));
   await page.route('**/api/products',route=>route.fulfill({json:{products:[]}}));
   await page.route('**/api/monitor/status',route=>route.fulfill({json:{enabled:true,tracks:['production'],intervalMinutes:5,snapshot:[],events:[],lastCheck:null,error:''}}));
@@ -551,35 +550,23 @@ test('Feishu notification settings hide secrets and only send a test on explicit
   await page.locator('#feishuTest').click();await expect(page.locator('#feishuResults')).toContainText('已发送');await expect(page.locator('#feishuResults')).not.toContainText('@全体成员');expect(tests).toBe(2);
 });
 
-test('review project selection is independent, persisted and used by Feishu',async({page})=>{
-  const a={id:'a',name:'Product A',packageName:'com.example.a'},b={id:'b',name:'Review B',packageName:'com.example.b'};
-  const requests=[];
-  await page.route('**/api/config',route=>route.fulfill({json:{profiles:[a,b],activeId:'a',current:a}}));
-  await page.route('**/api/monitor/**',route=>{
-    const body=route.request().postDataJSON();requests.push({url:route.request().url(),...body});
-    const json=route.request().url().endsWith('/summary')?{projects:[]}:route.request().url().includes('/feishu/')?{enabled:false,states:[],deliveries:[]}:{enabled:false,tracks:['production'],intervalMinutes:5,snapshot:[],events:[]};
-    return route.fulfill({json});
-  });
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
-  await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('9.99');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
-  await expect(page.locator('#pendingBadge')).toHaveText('1');
-  await page.locator('#reviewMonitor').click();await expect(page.locator('#reviewProject')).toHaveValue('a');
-  await page.locator('#reviewProject').selectOption('b');await expect(page.locator('#modal')).toContainText('应用审核监控 · Review B');
-  await page.locator('#reviewEnabled').check();
-  page.once('dialog',dialog=>dialog.dismiss());
-  await page.locator('#reviewProject').selectOption('a');await expect(page.locator('#reviewProject')).toHaveValue('b');await expect(page.locator('#reviewEnabled')).toBeChecked();
-  await page.locator('#reviewSave').click();await expect(page.locator('#status')).toContainText('监控已关闭');
-  expect(requests.find(r=>r.url.endsWith('/config')).profileId).toBe('b');
-  await page.locator('#reviewFeishu').click();await expect(page.locator('#modal')).toContainText('飞书群通知 · Review B');
-  expect(requests.find(r=>r.url.endsWith('/feishu/status')).profileId).toBe('b');
-  await page.locator('#closeModal').click();await expect(page.locator('#mode')).toHaveValue('demo');await expect(page.locator('#project')).toHaveValue('a');await expect(page.locator('#pendingBadge')).toHaveText('1');
-  await page.reload();await page.locator('#reviewMonitor').click();await expect(page.locator('#reviewProject')).toHaveValue('b');
-  expect(requests.filter(r=>!r.url.endsWith('/summary')).every(r=>r.mode==='live')).toBeTruthy();
+test('review and Feishu stay on the current project instead of a remembered target',async({page})=>{
+ const a={id:'a',name:'Product A',packageName:'com.example.a'},b={id:'b',name:'Review B',packageName:'com.example.b'},requests=[];
+ await page.route('**/api/config',route=>route.fulfill({json:{profiles:[a,b],activeId:'a',current:a}}));await mockProjects(page,'google',[a,b]);
+ await page.addInitScript(()=>localStorage.setItem('gp-review-project-v1','b'));
+ await page.route('**/api/monitor/**',route=>{
+  const body=route.request().postDataJSON();requests.push({url:route.request().url(),...body});
+  return route.fulfill({json:route.request().url().endsWith('/summary')?{projects:[]}:route.request().url().includes('/feishu/')?{enabled:false,states:[],deliveries:[]}:{enabled:false,tracks:['production'],intervalMinutes:5,snapshot:[],events:[]}});
+ });
+ await page.route('**/api/products',r=>r.fulfill({json:{products:[]}}));await page.goto('/');await expect(page.locator('#workspaceManage')).toBeVisible();
+ await page.locator('#reviewMonitor').click();await expect(page.locator('#reviewProject')).toHaveValue('a');await expect(page.locator('#reviewProject')).toBeDisabled();
+ await page.locator('#reviewFeishu').click();await expect(page.locator('#dialogTitle')).toContainText('Product A');
+ expect(requests.filter(r=>!r.url.endsWith('/summary')).every(r=>r.profileId==='a')).toBeTruthy();
 });
 
 for(const previewFirst of [false,true])test('new draft discard removes product and survives reload '+(previewFirst?'after activation preview':'before preview'),async({page})=>{
   let commits=0;page.on('request',r=>{if(r.url().endsWith('/api/commit'))commits++;});
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   const total=Number(await page.locator('#total').textContent());
   await page.locator('#create').click();await page.locator('#editId').fill('discard_new');
   await page.getByLabel('商品名称',{exact:true}).fill('New draft');await page.getByLabel('商品描述',{exact:true}).fill('Discard test');
@@ -594,7 +581,7 @@ for(const previewFirst of [false,true])test('new draft discard removes product a
 });
 
 test('new draft discard preserves other drafts and rolls back when storage fails',async({page})=>{
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('8.76');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await page.locator('#copy').click();await page.locator('#copyIds').fill('discard_copy\nkeep_copy');await page.getByRole('button',{name:'生成商品草稿'}).click();
   await page.locator('#clearSelection').click();await page.locator('[data-select="discard_copy"]').check();await expect(page.locator('#pendingBadge')).toHaveText('3');
@@ -614,7 +601,7 @@ test('new draft discard preserves other drafts and rolls back when storage fails
 test('checking submission confirmation clears its stale error without sending automatically',async({page})=>{
   let commits=0;
   await page.route('**/api/commit',route=>{commits++;return route.fulfill({status:400,json:{error:'模拟远端错误：请重新预览'}});});
-  await page.goto('/');await expect(page.locator('#products')).toContainText('coins_100');
+  await page.goto('/?demo=1');await expect(page.locator('#products')).toContainText('coins_100');
   await page.locator('[data-edit="coins_100"]').click();await page.locator('[data-k="price"]').first().fill('7.65');await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await page.locator('#preview').click();await expect(page.locator('#dialogTitle')).toContainText('提交前预览');
   await page.getByRole('button',{name:'提交演示变更',exact:true}).click();await expect(page.locator('#modalError')).toContainText('请先核对并勾选变更确认');expect(commits).toBe(0);

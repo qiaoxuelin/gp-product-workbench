@@ -1,0 +1,24 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+test('Apple HTTP routes protect credentials, retain Google config and require matching app identity',async t=>{
+ const data=fs.mkdtempSync(path.join(os.tmpdir(),'gp-apple-http-'));process.env.GP_DATA_DIR=data;process.env.GP_PORT='14322';
+ const {server}=require('../server'),nativeFetch=global.fetch;await new Promise(r=>server.listen(14322,'127.0.0.1',r));
+ t.after(async()=>{global.fetch=nativeFetch;await new Promise(r=>server.close(r));fs.rmSync(data,{recursive:true,force:true});});
+ const host='http://127.0.0.1:14322',session=await(await nativeFetch(host+'/api/session')).json();
+ const call=async(endpoint,body={},expected=200)=>{const r=await nativeFetch(host+'/api/'+endpoint,{method:'POST',headers:{'Content-Type':'application/json','X-GP-Token':session.token},body:JSON.stringify(body)}),result=await r.json();assert.equal(r.status,expected,JSON.stringify(result));return result;};
+ const html=await nativeFetch(host+'/apple.html');assert.equal(html.status,200);assert((await html.text()).includes('/apple.js'));assert.equal((await nativeFetch(host+'/apple.js')).status,200);
+ const unauth=await nativeFetch(host+'/api/apple/config',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(unauth.status,403);
+ const privateKey=crypto.generateKeyPairSync('ec',{namedCurve:'prime256v1'}).privateKey.export({type:'pkcs8',format:'pem'});
+ const fields={name:'Apple test',appId:'123456',bundleId:'com.test.apple',keyId:'ABCDEFGHIJ',issuerId:'12345678-1234-1234-1234-123456789abc'};
+ const googleBefore=await call('config'),a=await call('apple/config/save',{...fields,privateKey});assert(a.current.hasCredential);assert(!JSON.stringify(a).includes('PRIVATE KEY'));assert(!JSON.stringify(a).includes('credentialFile'));
+ const stored=JSON.parse(fs.readFileSync(path.join(data,'apple-config.json')));assert(!fs.readFileSync(path.join(data,stored.profiles[0].credentialFile),'utf8').includes('PRIVATE KEY'));assert.deepEqual(await call('config'),googleBefore);
+ await call('apple/config/save',{...fields,id:a.activeId,keyId:'ZZZZZZZZZZ'},400);
+ await call('apple/config/save',{...fields,id:a.activeId,privateKey:'invalid'},400);assert((await call('apple/config')).current.hasCredential);
+ const p={platform:'apple',profileId:a.activeId,appId:fields.appId},after={productId:'coins',name:'Coins',inAppPurchaseType:'CONSUMABLE',reviewNote:'',localizations:[]};
+ const remoteCalls=[];global.fetch=async(url,o)=>{if(String(url).startsWith(host))return nativeFetch(url,o);remoteCalls.push({url:String(url),method:o.method});assert.match(o.headers.Authorization,/^Bearer /);return Response.json(String(url).includes('/inAppPurchasesV2')?{data:[],links:{}}:{data:{attributes:{bundleId:fields.bundleId}}});};
+ const plan=await call('apple/preview',{...p,items:[{before:null,after}]});assert(remoteCalls.every(x=>x.method==='GET'));
+ const b=await call('apple/config/save',{...fields,name:'Other',appId:'987654'});
+ await call('apple/commit',{...p,id:plan.id},400);
+ await call('apple/config/switch',{id:a.activeId});await call('apple/commit',{...p,id:plan.id},400);
+ await call('apple/products',{...p,platform:'google'},400);assert.notEqual(a.activeId,b.activeId);
+});
