@@ -1,6 +1,7 @@
 'use strict';
 const crypto=require('node:crypto'),C=require('./core');
 const TYPES=['CONSUMABLE','NON_CONSUMABLE'],enc=encodeURIComponent,link=(type,id)=>({data:{type,id}});
+const CSV_HEADERS=['productId','name','inAppPurchaseType','reviewNote','locale','displayName','description','territory','currency','price'];
 function editable(p){return {productId:p.productId,name:p.name,inAppPurchaseType:p.inAppPurchaseType,reviewNote:p.reviewNote||'',localizations:(p.localizations||[]).map(({locale,name,description})=>({locale,name,description:description||''})).sort((a,b)=>a.locale.localeCompare(b.locale))};}
 function validate(p){
  if(!p||typeof p!=='object'||Array.isArray(p))throw Error('苹果商品格式错误');
@@ -21,6 +22,7 @@ function validate(p){
 }
 function importCSV(text,existing=[]){
  const rows=C.parseCSV(text);if(!rows.length||rows.length>5000)throw Error('CSV 需要 1–5000 行');const map=new Map(),seen=new Map();
+ const unknown=Object.keys(rows[0]).filter(h=>!CSV_HEADERS.includes(h));if(unknown.length)throw Error('苹果 CSV 不支持的列：'+unknown.join('、')+'；请使用模板中的英文表头：'+CSV_HEADERS.join(','));
  for(const r of rows){
   for(const h of ['productId','name','inAppPurchaseType','locale','displayName','description'])if(!(h in r))throw Error('苹果 CSV 缺少列：'+h);
   const id=r.productId,previous=existing.find(x=>x.productId===id),identity=JSON.stringify([r.name,r.inAppPurchaseType,r.reviewNote||'',r.territory||'',r.currency||'',r.price||'']);
@@ -32,7 +34,7 @@ function importCSV(text,existing=[]){
  const result=[...map.values()];result.forEach(validate);return result;
 }
 function exportCSV(products){
- const headers=['productId','name','inAppPurchaseType','reviewNote','locale','displayName','description','territory','currency','price'];
+ const headers=CSV_HEADERS;
  const rows=products.flatMap(p=>(p.localizations.length?p.localizations:[{}]).map(l=>[p.productId,p.name,p.inAppPurchaseType,p.reviewNote,l.locale,l.name,l.description,p.initialPrice?.territory,p.initialPrice?.currency,p.initialPrice?.price]));
  return '\uFEFF'+[headers,...rows].map(r=>r.map(x=>'"'+String(x??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
 }
@@ -50,18 +52,22 @@ function createAppleProducts({client,read,save}){
  async function find(p,id){const matches=await client.list(p,'/v1/apps/'+enc(p.appId)+'/inAppPurchasesV2?filter%5BproductId%5D='+enc(id)+'&limit=200');const r=matches.find(r=>r.attributes.productId===id);return r?hydrate(p,r):null;}
  async function list(p){await verifyApp(p);const rows=await client.list(p,'/v1/apps/'+enc(p.appId)+'/inAppPurchasesV2?limit=200'),result=[];for(const r of rows)if(TYPES.includes(r.attributes.inAppPurchaseType))result.push(await hydrate(p,r));return result;}
  async function verifyPriceTerritory(p,price){
-  const territory=await request(p,'GET','/v1/territories/'+enc(price.territory));if(territory.data?.attributes?.currency!==price.currency)throw Error('币种与 Apple 地区币种不一致');
+  const territories=await client.list(p,'/v1/territories?limit=200');
+  const territory=territories.find(t=>t.id===price.territory);
+  if(!territory)throw Error('Apple 不支持该基准地区：'+price.territory+'；请使用 Apple 三位地区代码');
+  if(territory.attributes?.currency!==price.currency)throw Error('币种与 Apple 地区币种不一致');
  }
  async function point(p,id,price){
   await verifyPriceTerritory(p,price);
   const rows=await client.list(p,'/v2/inAppPurchases/'+enc(id)+'/pricePoints?filter%5Bterritory%5D='+enc(price.territory)+'&limit=8000');
   const found=rows.filter(x=>Number(x.attributes.customerPrice)===Number(price.price));if(found.length!==1)throw Error('Apple 未返回唯一匹配价格档位：'+price.currency+' '+price.price+'；请调整金额后重新预览');return found[0].id;
  }
- function matchesPrice(actual,target,pointId){return actual?.priceSchedule?.baseTerritory===target.territory&&actual.priceSchedule.prices.some(x=>x.pointId===pointId&&!x.endDate&&(!x.startDate||x.startDate<=new Date().toISOString().slice(0,10)));}
+ function activePrice(x,today=new Date().toISOString().slice(0,10)){return (!x.startDate||x.startDate<=today)&&(!x.endDate||x.endDate>today);}
+ function matchesPrice(actual,target,pointId){return actual?.priceSchedule?.baseTerritory===target.territory&&actual.priceSchedule.prices.some(x=>x.territory===target.territory&&x.pointId===pointId&&activePrice(x));}
  async function preview(p,items){
   if(!Array.isArray(items)||!items.length||items.length>100)throw Error('每批选择 1–100 个苹果商品');
   const ids=new Set();for(const item of items){validate(item.after);if(ids.has(item.after.productId))throw Error('商品 ID 重复');ids.add(item.after.productId);}
-  await verifyApp(p);const entries=[],checkedTerritories=new Set();
+  await verifyApp(p);const entries=[],unchanged=[],checkedTerritories=new Set();
   for(const {after} of items)if(after.initialPrice){const identity=after.initialPrice.territory+':'+after.initialPrice.currency;if(!checkedTerritories.has(identity)){await verifyPriceTerritory(p,after.initialPrice);checkedTerritories.add(identity);}}
   for(const item of items){const after=structuredClone(item.after),before=await find(p,after.productId);if(!C.equal(before,item.before||null))throw Error(after.productId+'：远端已变化或商品已存在，请先读取核对');
    if(before&&before.inAppPurchaseType!==after.inAppPurchaseType)throw Error('已创建商品不能修改内购类型');
@@ -71,9 +77,11 @@ function createAppleProducts({client,read,save}){
    let pointId=null;if(after.initialPrice&&before){pointId=await point(p,before.id,after.initialPrice);if(before.priceSchedule&&!matchesPrice(before,after.initialPrice,pointId))throw Error('已有价格计划，本版只初始化价格；请在 App Store Connect 调价');}
    const changes=C.changes(before?editable(before):{},editable(after));if(after.initialPrice&&(!before||!matchesPrice(before,after.initialPrice,pointId)))changes.push({path:'initialPrice',before:null,after:after.initialPrice});
    if(changes.length)entries.push({before,after,changes,pointId});
+   else unchanged.push({productId:after.productId,status:'verified',before,target:after,actual:before});
   }
-  if(!entries.length)throw Error('没有待提交修改');for(const [id,plan]of plans)if(plan.expires<Date.now())plans.delete(id);
-  const plan={id:crypto.randomUUID(),platform:'apple',profileId:p.id,appId:p.appId,bundleId:p.bundleId,configHash:C.hash(p),expires:Date.now()+900000,entries};plans.set(plan.id,plan);return plan;
+  if(!entries.length)return {platform:'apple',profileId:p.id,appId:p.appId,bundleId:p.bundleId,entries:[],unchanged};
+  for(const [id,plan]of plans)if(plan.expires<Date.now())plans.delete(id);
+  const plan={id:crypto.randomUUID(),platform:'apple',profileId:p.id,appId:p.appId,bundleId:p.bundleId,configHash:C.hash(p),expires:Date.now()+900000,entries,unchanged};plans.set(plan.id,plan);return plan;
  }
  async function writeMetadata(p,actual,after,checkpoint){
   if(C.equal(editable(actual).localizations,editable(after).localizations))return;
@@ -91,7 +99,7 @@ function createAppleProducts({client,read,save}){
   const file='apple-operation-'+Date.now()+'-'+plan.id+'.json',history=read('apple-history.json',[]);save(file,record);save('apple-history.json',[file,...history].slice(0,100));
   for(const entry of plan.entries){let attempted=false,confirmed=false,stage='check';const completed=[];
    const checkpoint=s=>{confirmed=true;completed.push(s);save(file,record);};
-   const result={productId:entry.after.productId,status:'pending',completed};record.results.push(result);save(file,record);
+   const result={productId:entry.after.productId,before:entry.before,target:entry.after,status:'pending',completed};record.results.push(result);save(file,record);
    try{let actual=await find(p,entry.after.productId);if(!C.equal(actual,entry.before))throw Error('远端已变化，未写入；请重新读取');const after=entry.after;
     if(!actual){stage='create';attempted=true;const r=await request(p,'POST','/v2/inAppPurchases',{data:{type:'inAppPurchases',attributes:{name:after.name,productId:after.productId,inAppPurchaseType:after.inAppPurchaseType,reviewNote:after.reviewNote||''},relationships:{app:link('apps',p.appId)}}});checkpoint('create');actual={id:r.data.id,...after,localizations:[],version:null,priceSchedule:null};}
     else if(actual.name!==after.name||actual.reviewNote!==(after.reviewNote||'')){stage='configuration';attempted=true;await request(p,'PATCH','/v2/inAppPurchases/'+enc(actual.id),{data:{type:'inAppPurchases',id:actual.id,attributes:{name:after.name,reviewNote:after.reviewNote||''}}});checkpoint('configuration');}
@@ -111,7 +119,7 @@ function createAppleProducts({client,read,save}){
   if(!record||record.platform!=='apple'||record.profileId!==p.id||record.appId!==p.appId||record.bundleId!==p.bundleId)throw Error('记录不属于当前苹果项目');
   await verifyApp(p);const results=[];
   for(const entry of record.entries){
-   const result={productId:entry.after.productId,target:entry.after,status:'pending'};
+   const result={productId:entry.after.productId,before:entry.before,target:entry.after,status:'pending'};
    try{
     result.actual=await find(p,entry.after.productId);
     let priceOK=!entry.after.initialPrice;
@@ -124,6 +132,24 @@ function createAppleProducts({client,read,save}){
   return {results};
  }
 
- return {list,preview,commit,history,reconcile,invalidate:()=>plans.clear()};
+ async function exportWithPrices(p,items,remoteProductIds=[]){
+  if(!Array.isArray(items)||!Array.isArray(remoteProductIds))throw Error('导出商品范围无效');items.forEach(validate);
+  const ids=new Set(items.map(x=>x.productId));if(remoteProductIds.some(id=>typeof id!=='string'||!ids.has(id))||new Set(remoteProductIds).size!==remoteProductIds.length)throw Error('导出远端商品范围无效');
+  const products=structuredClone(items),warnings=[],remote=new Set(remoteProductIds),needsRemote=products.filter(x=>remote.has(x.productId)&&!x.initialPrice);
+  let territories=null;if(needsRemote.length)await verifyApp(p);
+  for(const product of needsRemote){
+   const actual=await find(p,product.productId);if(!actual)throw Error(product.productId+'：远端商品不存在，请重新读取后导出');
+   const schedule=actual.priceSchedule;if(!schedule){warnings.push(product.productId+' 尚无价格计划');continue;}
+   const prices=schedule.prices.filter(x=>x.territory===schedule.baseTerritory&&activePrice(x));
+   if(prices.length!==1)throw Error(product.productId+'：未能确定唯一的当前基准价格，未导出');
+   const points=await client.list(p,'/v2/inAppPurchases/'+enc(actual.id)+'/pricePoints?filter%5Bterritory%5D='+enc(schedule.baseTerritory)+'&limit=8000');
+   const pricePoint=points.find(x=>x.id===prices[0].pointId);if(!pricePoint||typeof pricePoint.attributes?.customerPrice!=='string')throw Error(product.productId+'：未读取到基准价格金额，未导出');
+   territories=territories||await client.list(p,'/v1/territories?limit=200');
+   const territory=territories.find(x=>x.id===schedule.baseTerritory);if(!territory?.attributes?.currency)throw Error(product.productId+'：未读取到基准地区币种，未导出');
+   product.initialPrice={territory:schedule.baseTerritory,currency:territory.attributes.currency,price:pricePoint.attributes.customerPrice};validate(product);
+  }
+  return {csv:exportCSV(products),warnings};
+ }
+ return {list,preview,commit,history,reconcile,exportWithPrices,invalidate:()=>plans.clear()};
 }
 module.exports={createAppleProducts,validate,editable,importCSV,exportCSV};

@@ -32,7 +32,7 @@ function createAppleWorkspace({data,read,save,client:injectedClient}){
   if(b.platform!=='apple'||!p||b.profileId!==p.id||b.appId!==p.appId)throw Error('苹果项目已切换或目标不一致，请重新读取');
   if(url==='/api/apple/validate'){Products.validate(b.product);return {valid:true};}
   if(url==='/api/apple/import'){if(!Array.isArray(b.existing))throw Error('商品列表无效');b.existing.forEach(Products.validate);return {products:Products.importCSV(b.csv,b.existing)};}
-  if(url==='/api/apple/export'){if(!Array.isArray(b.products))throw Error('商品列表无效');b.products.forEach(Products.validate);return {csv:Products.exportCSV(b.products)};}
+  if(url==='/api/apple/export')return products.exportWithPrices(p,b.products,b.remoteProductIds);
   if(url==='/api/apple/products')return {products:await products.list(p)};
   if(url==='/api/apple/preview')return products.preview(p,b.items);
   if(url==='/api/apple/commit')return products.commit(p,b);

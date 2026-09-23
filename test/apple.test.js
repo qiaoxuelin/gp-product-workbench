@@ -10,7 +10,7 @@ function harness(){
  const client={invalidate(){},async request(p,method,url,body){
   calls.push({method,url,body});
   if(method==='GET'&&url.startsWith('/v1/apps/'))return {data:{attributes:{bundleId:mismatch?'com.wrong':p.bundleId}}};
-  if(method==='GET'&&url.startsWith('/v1/territories/'))return {data:{attributes:{currency:'USD'}}};
+  if(method==='GET'&&url.startsWith('/v1/territories/')){const e=Error("The resource 'territories' does not allow 'GET_INSTANCE'. Allowed operation is: GET_COLLECTION");e.status=403;throw e;}
   if(method==='GET'&&url.includes('/iapPriceSchedule')){const row=[...rows.values()].find(x=>url.includes('/'+x.id+'/'));if(!row.schedule){const e=Error('no price');e.status=404;throw e;}return {data:{id:row.id,relationships:{baseTerritory:{data:{id:'USA'}}}}};}
   if(method==='POST'&&url==='/v2/inAppPurchases'){assert.deepEqual(body.data.relationships.app.data,{type:'apps',id:p.appId});const row={id:String(++serial),...body.data.attributes,localizations:[],version:null};rows.set(row.productId,row);return {data:resource(row)};}
   if(method==='PATCH'&&url.startsWith('/v2/inAppPurchases/')){const row=[...rows.values()].find(x=>url.endsWith('/'+x.id));Object.assign(row,body.data.attributes);return {data:resource(row)};}
@@ -23,6 +23,7 @@ function harness(){
   throw Error('unexpected request '+method+' '+url);
  },async list(p,url){
   calls.push({method:'GET',url});const u=new URL(url,'https://test');
+  if(u.pathname==='/v1/territories'){assert.equal(u.searchParams.get('limit'),'200');return [{id:'CHN',attributes:{currency:'CNY'}},{id:'USA',attributes:{currency:'USD'}}];}
   if(url.includes('/inAppPurchasesV2')){const id=u.searchParams.get('filter[productId]');return [...rows.values()].filter(x=>!id||x.productId===id).map(resource);}
   const row=[...rows.values()].find(x=>url.includes('/'+x.id+'/')||url.includes('/v'+x.id+'/'));
   if(url.includes('/versions?'))return row.version?[row.version]:[];
@@ -39,7 +40,7 @@ test('Apple CSV merges locales, rejects subscriptions and Google formats, and pr
  const result=P.importCSV(csv,[a]);assert.equal(result[0].localizations.length,2);assert.equal(result[0].reviewNote,'retain');assert.deepEqual(P.importCSV(P.exportCSV(result)),result);
  assert.throws(()=>P.validate({...a,inAppPurchaseType:'NON_RENEWING_SUBSCRIPTION'}),/仅支持/);
  assert.throws(()=>P.validate({...a,localizations:[{locale:'en-US',name:'N',description:'x'}]}),/2–30/);
- assert.throws(()=>P.importCSV('productId,purchaseOptionId\na,b'),/缺少列/);
+ assert.throws(()=>P.importCSV('productId,purchaseOptionId\na,b'),/不支持的列：purchaseOptionId/);
  assert.throws(()=>P.importCSV(csv+'\ncoins.100,Other,CONSUMABLE,en-US,Coins,More'),/不一致/);
 });
 test('Apple JWT uses P-256 P1363, isolates profiles, blocks credential forwarding and paginates',async()=>{
@@ -101,4 +102,67 @@ test('Apple reconciliation preserves partial metadata when price lookup fails an
  const original=h.client.list;h.client.list=async(p,url)=>{if(url.includes('filter%5BproductId%5D=coins.100'))throw Error('read failed');return original(p,url);};
  const failed=await h.service.reconcile(profile,result.logFile);
  assert.equal(failed.results[0].canLoadCurrent,false);assert.equal(Object.hasOwn(failed.results[0],'actual'),false);assert.match(failed.results[0].message,/read failed/);assert.equal(failed.results[1].status,'verified');
+});
+
+test('Apple territory validation uses the collection and rejects unknown territories before writes',async()=>{
+ const h=harness(),after={...target(),initialPrice:{territory:'USA',currency:'USD',price:'0.99'}};
+ const plan=await h.service.preview(profile,[{after}]);assert.equal(plan.entries.length,1);
+ assert(h.calls.some(c=>c.url==='/v1/territories?limit=200'));
+ assert(!h.calls.some(c=>c.url.startsWith('/v1/territories/')));
+ await assert.rejects(h.service.preview(profile,[{after:{...after,initialPrice:{...after.initialPrice,territory:'ZZZ'}}}]),/不支持该基准地区/);
+ assert(h.calls.every(c=>c.method==='GET'));
+});
+
+
+test('Apple CSV rejects unknown optional headers instead of dropping review notes or prices',()=>{
+ const headers='productId,name,inAppPurchaseType,locale,displayName,description';
+ const row='coins.100,Coins 100,CONSUMABLE,en-US,100 Coins,Receive 100 coins';
+ assert.throws(()=>P.importCSV(headers+',reviewNotes\n'+row+',Important'),/不支持的列：reviewNotes/);
+ assert.throws(()=>P.importCSV(headers+',baseTerritory,currencyCode,initialPrice\n'+row+',USA,USD,0.99'),/baseTerritory、currencyCode、initialPrice/);
+ assert.equal(P.importCSV(headers+'\n'+row)[0].productId,'coins.100');
+});
+test('Apple unchanged price previews return verified items and mixed batches commit only changes',async()=>{
+ const h=harness(),after={...target(),initialPrice:{territory:'USA',currency:'USD',price:'0.99'}};
+ const first=await h.service.preview(profile,[{after}]);await h.service.commit(profile,{id:first.id,platform:'apple',appId:profile.appId});
+ const before=(await h.service.list(profile))[0],writes=h.calls.filter(c=>c.method!=='GET').length;
+ const noop=await h.service.preview(profile,[{before,after}]);assert.equal(noop.entries.length,0);assert.equal(noop.id,undefined);assert.equal(noop.unchanged[0].status,'verified');assert.deepEqual(noop.unchanged[0].actual,before);
+ const mixed=await h.service.preview(profile,[{before,after},{after:{...target(),productId:'coins.other'}}]);assert.equal(mixed.entries.length,1);assert.equal(mixed.unchanged.length,1);assert.equal(h.calls.filter(c=>c.method!=='GET').length,writes);
+ const result=await h.service.commit(profile,{id:mixed.id,platform:'apple',appId:profile.appId});assert.deepEqual(result.results.map(x=>x.productId),['coins.other']);assert.equal(result.results[0].status,'verified');
+ const reconciled=await h.service.reconcile(profile,result.logFile);assert.equal(reconciled.results[0].before,null);
+});
+test('Apple exports current base price, keeps local pending price and never writes remotely',async()=>{
+ const h=harness(),after={...target(),initialPrice:{territory:'USA',currency:'USD',price:'0.99'}};
+ const plan=await h.service.preview(profile,[{after},{after:{...target(),productId:'unpriced'}}]);await h.service.commit(profile,{id:plan.id,platform:'apple',appId:profile.appId});
+ const remote=await h.service.list(profile),before=structuredClone(remote),products=remote.map(P.editable),writes=h.calls.filter(c=>c.method!=='GET').length;
+ const result=await h.service.exportWithPrices(profile,products,products.map(p=>p.productId)),parsed=P.importCSV(result.csv);
+ assert.deepEqual(parsed.find(p=>p.productId===after.productId).initialPrice,after.initialPrice);assert.match(result.warnings[0],/unpriced.*尚无价格计划/);assert.deepEqual(remote,before);assert(!products[0].initialPrice);
+ const pending={...products[0],initialPrice:{territory:'USA',currency:'USD',price:'2.99'}},calls=h.calls.length;
+ assert.equal(P.importCSV((await h.service.exportWithPrices(profile,[pending],[pending.productId])).csv)[0].initialPrice.price,'2.99');assert.equal(h.calls.length,calls);
+ assert.equal(h.calls.filter(c=>c.method!=='GET').length,writes);
+ await assert.rejects(h.service.exportWithPrices(profile,products,['not-selected']),/范围无效/);
+ const list=h.client.list;h.client.list=async(p,url)=>url.includes('/pricePoints?')?[]:list(p,url);
+ await assert.rejects(h.service.exportWithPrices(profile,[products[0]],[products[0].productId]),/未读取到基准价格金额/);
+});
+
+test('Apple price export chooses the current base territory period and rejects ambiguous prices',async()=>{
+ const h=harness(),after={...target(),initialPrice:{territory:'USA',currency:'USD',price:'0.99'}};
+ const plan=await h.service.preview(profile,[{after}]);await h.service.commit(profile,{id:plan.id,platform:'apple',appId:profile.appId});
+ const actual=(await h.service.list(profile))[0],product=P.editable(actual),original=h.client.list;let ambiguous=false;
+ h.client.list=async(p,url)=>{const rows=await original(p,url);if(!url.includes('/manualPrices?'))return rows;const current=rows[0];return [
+  {...current,id:'future',attributes:{startDate:'2099-01-01',endDate:null},relationships:{...current.relationships,inAppPurchasePricePoint:{data:{id:'future-point'}}}},
+  {...current,id:'expired',attributes:{startDate:'1999-01-01',endDate:'2000-01-01'}},
+  {...current,id:'other-territory',relationships:{...current.relationships,territory:{data:{id:'CHN'}}}},
+  ...rows,...(ambiguous?[{...current,id:'duplicate'}]:[])
+ ];};
+ const result=await h.service.exportWithPrices(profile,[product],[product.productId]);assert.equal(P.importCSV(result.csv)[0].initialPrice.price,'0.99');
+ ambiguous=true;await assert.rejects(h.service.exportWithPrices(profile,[product],[product.productId]),/唯一的当前基准价格/);
+});
+
+test('Apple exported current price with a scheduled future change previews as unchanged',async()=>{
+ const h=harness(),after={...target(),initialPrice:{territory:'USA',currency:'USD',price:'0.99'}};
+ const first=await h.service.preview(profile,[{after}]);await h.service.commit(profile,{id:first.id,platform:'apple',appId:profile.appId});
+ const original=h.client.list;h.client.list=async(p,url)=>{const rows=await original(p,url);return url.includes('/manualPrices?')?rows.map(x=>({...x,attributes:{...x.attributes,endDate:'2099-01-01'}})):rows;};
+ const before=(await h.service.list(profile))[0],exported=await h.service.exportWithPrices(profile,[P.editable(before)],[before.productId]);
+ const imported=P.importCSV(exported.csv)[0],writes=h.calls.filter(c=>c.method!=='GET').length,plan=await h.service.preview(profile,[{before,after:imported}]);
+ assert.equal(plan.entries.length,0);assert.equal(plan.unchanged.length,1);assert.equal(h.calls.filter(c=>c.method!=='GET').length,writes);
 });
