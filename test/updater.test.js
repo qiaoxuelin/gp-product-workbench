@@ -39,3 +39,16 @@ test('unsupported platform rejects installation and network errors remain action
   const {updater}=fixture(t,{supported:false,fetchImpl:async()=>{throw Error('offline');}});
   assert.throws(()=>updater.begin('0.2.0'),/仅支持 Windows/);await assert.rejects(updater.check(),/无法连接 GitHub/);
 });
+test('background checks share requests and throttle success and failure; manual checks stay fresh',async t=>{
+  let calls=0,time=1000,offline=false;
+  const {updater}=fixture(t,{now:()=>time,fetchImpl:async()=>{calls++;if(offline)throw Error('offline');return Response.json(metadata());}});
+  await Promise.all([updater.check({background:true}),updater.check({background:true})]);
+  assert.equal(calls,1);
+  await updater.check({background:true});assert.equal(calls,1);
+  await updater.check();assert.equal(calls,2);
+  time+=60*60*1000;offline=true;
+  await assert.rejects(updater.check({background:true}),/无法连接/);
+  await assert.rejects(updater.check({background:true}),/无法连接/);assert.equal(calls,3);
+  offline=false;await updater.check();assert.equal(calls,4);
+  await updater.check({background:true});assert.equal(calls,4);
+});

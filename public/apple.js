@@ -124,8 +124,8 @@ async function history(){const data=await job(()=>api('history'));status('操作
 async function init(){
  const session=await(await fetch('/api/session')).json();token=session.token;
  const systemApi=async(path,body={})=>{const s=await(await fetch('/api/session')).json();const r=await fetch('/api/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-GP-Token':s.token},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error||'请求失败');return data;};
- const system=SystemTools.create({esc,demo:()=>workspace.enterDemo(),api:systemApi,modal,close,status,job,download,persist,setWorking:value=>{working=value;},render});
- bind('update',system.updateDialog);bind('support',system.supportDialog);bind('about',()=>modal('关于 PlayBatch','<p>同一项目下分别管理 Google Play 与 App Store 商品、授权和草稿。</p><p>当前版本：'+esc(session.version)+'</p>',[{label:'关闭',run:close}]));
+ const system=SystemTools.create({busy:()=>working,esc,demo:()=>workspace.enterDemo(),api:systemApi,modal,close,status,job,download,persist,setWorking:value=>{working=value;},render});
+ bind('update',system.updateDialog);system.startUpdateChecks();bind('support',system.supportDialog);bind('about',()=>modal('关于 PlayBatch','<p>同一项目下分别管理 Google Play 与 App Store 商品、授权和草稿。</p><p>当前版本：'+esc(session.version)+'</p>',[{label:'关闭',run:close}]));
  $('appVersion').textContent='PlayBatch v'+session.version;settings=await api('config');restore();
  bind('settings',()=>workspace?workspace.configure():openSettings());bind('newProject',()=>openSettings(true));bind('closeModal',close);bind('refresh',refresh);bind('create',()=>edit(newProduct(),true));bind('import',importDialog);bind('preview',preview);bind('history',history);
  bind('export',async()=>{

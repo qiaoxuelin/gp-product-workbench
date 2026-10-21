@@ -609,3 +609,35 @@ test('checking submission confirmation clears its stale error without sending au
   await page.getByRole('button',{name:'提交演示变更',exact:true}).click();await expect(page.locator('#modalError')).toContainText('模拟远端错误');expect(commits).toBe(1);
   await page.locator('#confirmWrite').uncheck();await page.locator('#confirmWrite').check();await expect(page.locator('#modalError')).toContainText('模拟远端错误');expect(commits).toBe(1);
 });
+
+
+test('multiple Feishu webhooks and in-review state can be configured without sending',async({page})=>{
+ const p={id:'notify-multi',name:'Multi',packageName:'com.test.multi',hasCredential:true};
+ await mockProjects(page,'google',[p]);await page.route('**/api/config',r=>r.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));
+ await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'notify-multi'})));
+ await page.route('**/api/products',r=>r.fulfill({json:{products:[]}}));
+ await page.route('**/api/monitor/status',r=>r.fulfill({json:{enabled:true,tracks:['production'],intervalMinutes:5,snapshot:[],events:[]}}));
+ const state={enabled:true,states:['RELEASE_LIFECYCLE_STATE_PUBLISHED'],targets:[{id:'primary',name:'原群',hasWebhook:true,hasSecret:true}],hasWebhook:true,hasSecret:true,deliveries:[]};let payload,sent=0;
+ await page.route('**/api/monitor/feishu/status',r=>r.fulfill({json:state}));
+ await page.route('**/api/monitor/feishu/config',r=>{payload=r.request().postDataJSON();state.targets=payload.targets.map((t,i)=>({id:t.id||'second',name:t.name,hasWebhook:true,hasSecret:i===0||!!t.secret}));state.states=payload.states;return r.fulfill({json:state});});
+ await page.route('**/api/monitor/feishu/test',r=>{sent++;return r.fulfill({json:state});});
+ await page.goto('/');await page.locator('#reviewMonitor').click();await page.locator('#reviewFeishu').click();
+ await page.locator('#feishuInReview').check();await page.locator('#feishuAddTarget').click();await page.locator('#feishuName1').fill('财务群');await page.locator('#feishuWebhook1').fill('https://open.feishu.cn/open-apis/bot/v2/hook/99999999-2222-3333-4444-555555555555');await page.locator('#feishuSecret1').fill('separate-secret');
+ await page.locator('#feishuSave').click();await expect(page.locator('#feishuWebhook1')).toHaveValue('');expect(payload.targets).toHaveLength(2);expect(payload.targets[0].id).toBe('primary');expect(payload.targets[1].secret).toBe('separate-secret');expect(payload.states).toContain('RELEASE_LIFECYCLE_STATE_IN_REVIEW');expect(sent).toBe(0);
+});
+
+
+test('monthly finance sync configuration is explicit and does not run on page load',async({page})=>{
+ const p={id:'monthly',name:'Monthly App',packageName:'com.test.monthly',financialBucket:'pubsite_prod_rev_test',hasCredential:true};
+ await mockProjects(page,'google',[p]);await page.route('**/api/config',r=>r.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));await page.route('**/api/products',r=>r.fulfill({json:{products:[]}}));
+ await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'monthly'})));
+ let config={enabled:false,profileId:'monthly',url:'https://pilotgamehub.feishu.cn/wiki/example',startMonth:'2026-09',day:15,productNames:{}},runs=0,payload;
+ await page.route('**/api/finance-sync/status',r=>r.fulfill({json:{config,phase:'idle',running:false,cliAvailable:true}}));
+ await page.route('**/api/finance-sync/config',r=>{payload=r.request().postDataJSON();config=payload;return r.fulfill({json:{config,running:false}});});
+ await page.route('**/api/finance-sync/start',r=>{runs++;return r.fulfill({json:{started:true}});});
+ await page.route('**/api/finance-sync/check',r=>r.fulfill({json:{title:'产品收入汇总'}}));
+ await page.goto('/');await page.locator('#finance').click();await expect(page.locator('#syncRun')).toBeVisible();expect(runs).toBe(0);
+ await page.locator('#syncNames').fill('com.test.monthly=Monthly Game');await page.locator('#syncEnabled').check();await page.locator('#syncSave').click();await expect(page.locator('#syncStatus')).toContainText('已保存');expect(payload.enabled).toBe(true);expect(payload.productNames['com.test.monthly']).toBe('Monthly Game');expect(runs).toBe(0);
+ await page.locator('#syncCheck').click();await expect(page.locator('#syncStatus')).toContainText('产品收入汇总');expect(runs).toBe(0);
+ await page.locator('#syncRun').click();await expect.poll(()=>runs).toBe(1);
+});

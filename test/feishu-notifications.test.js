@@ -4,7 +4,22 @@ const {createNotifier,webhook,sign,STATES}=require('../feishu-notifications');
 const url='https://open.feishu.cn/open-apis/bot/v2/hook/11111111-2222-3333-4444-555555555555';
 const profile={id:'one',name:'App One',packageName:'com.one'};
 const protect=(value,decrypt)=>decrypt?Buffer.from(value,'base64').toString():Buffer.from(value).toString('base64');
+const inReview='RELEASE_LIFECYCLE_STATE_IN_REVIEW';
 function fixture(t,fetchImpl){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gp-notify-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));let time=1700000000000;const options={file:path.join(dir,'notifications.json'),protect,fetchImpl,now:()=>time};return {options,make:()=>createNotifier(options),advance:()=>time+=1000};}
+test('in-review opt-in ignores past events and preserves deduplication across restart',async t=>{
+  const bodies=[],f=fixture(t,async(_,opts)=>{bodies.push(JSON.parse(opts.body));return Response.json({code:0});});
+  let n=f.make();const approved='RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED';
+  n.configure(profile,{enabled:true,states:[approved],webhook:url});
+  const event={id:'past-review',at:new Date(f.options.now()).toISOString(),track:'production',name:'1.1',versionCodes:['11'],after:inReview};
+  f.advance();n.configure(profile,{enabled:true,states:[approved,inReview]});
+  await n.process(profile,[event]);assert.equal(bodies.length,0);
+  f.advance();const fresh={...event,id:'new-review',at:new Date(f.options.now()).toISOString()};
+  await n.process(profile,[fresh]);assert.equal(bodies.length,1);assert.match(bodies[0].content.text,/已提审，审核中/);
+  n=f.make();await n.process(profile,[fresh]);assert.equal(bodies.length,1);
+  n.configure(profile,{enabled:true,states:[approved]});f.advance();
+  await n.process(profile,[{...fresh,id:'disabled-review',at:new Date(f.options.now()).toISOString()}]);assert.equal(bodies.length,1);
+  assert.deepEqual(n.status(profile).states,[approved]);
+});
 test('Feishu configuration validates destination, hides saved secrets and signs messages',async t=>{
   let body,calls=0;
   const f=fixture(t,async(target,opts)=>{calls++;assert.equal(target,url);assert.equal(opts.redirect,'error');body=JSON.parse(opts.body);return Response.json({code:0});}),n=f.make();
@@ -75,3 +90,47 @@ test('approval and publication mentions are frozen in delivery records and retri
   await n.process(profile,[event,{...event,id:'publication',after:STATES[1]}]);assert.equal(bodies.length,3);
   await n.process(profile,[{...event,id:'next-publication',after:STATES[1]}]);assert(!bodies[3].content.text.includes('<at '));
 });
+
+test('multiple webhooks fan out independently, sign per target and only retry the failed target',async t=>{
+  const second=url.replace('11111111','99999999'),bodies=[];let fail=true;
+  const f=fixture(t,async(target,opts)=>{const body=JSON.parse(opts.body);bodies.push({target,body});return Response.json(target===second&&fail?{code:123}:{code:0});});let n=f.make();
+  const configured=n.configure(profile,{enabled:true,states:[inReview],targets:[{webhook:url,secret:'first'},{webhook:second,secret:'second'}]});
+  assert.equal(configured.targets.length,2);assert(!JSON.stringify(configured).includes(second));assert(!fs.readFileSync(f.options.file,'utf8').includes(second));
+  f.advance();const event={id:'multi',at:new Date(f.options.now()).toISOString(),track:'production',name:'v2',versionCodes:['20'],after:inReview};
+  await n.process(profile,[event]);assert.equal(bodies.length,2);
+  for(const {target,body} of bodies)assert.equal(body.sign,sign(body.timestamp,target===url?'first':'second'));
+  const logs=n.status(profile).deliveries;assert.equal(logs.filter(x=>x.status==='sent').length,1);assert.equal(logs.filter(x=>x.status==='failed').length,1);
+  n=f.make();await n.process(profile,[event]);assert.equal(bodies.length,2);
+  fail=false;await n.retry(profile,logs.find(x=>x.status==='failed').id);assert.equal(bodies.length,3);assert.equal(bodies.at(-1).target,second);
+  const saved=n.status(profile);n.configure(profile,{enabled:true,states:[inReview],targets:saved.targets.map(x=>({id:x.id}))});
+  await n.test(profile);assert.equal(bodies.length,5);
+  assert.throws(()=>n.configure(profile,{enabled:true,states:[inReview],targets:[{webhook:url},{webhook:url}]}),/重复/);
+});
+test('legacy webhook stays primary after adding targets; removed destinations cannot receive retries',async t=>{
+  let calls=0;const f=fixture(t,async()=>{calls++;throw Error('timeout');});
+  fs.writeFileSync(f.options.file,JSON.stringify({one:{packageName:profile.packageName,enabled:true,states:[inReview],enabledSince:0,hasSecret:true,sealed:protect(JSON.stringify({webhook:url,secret:'legacy'})),deliveries:[]}}));
+  let n=f.make();assert.equal(n.status(profile).targets[0].id,'primary');
+  const s=n.configure(profile,{enabled:true,states:[inReview],targets:[{id:'primary'},{webhook:url.replace('11111111','99999999')}]});
+  await n.test(profile);assert.equal(calls,2);
+  const failed=n.status(profile).deliveries.find(x=>x.targetId!=='primary');
+  n.configure(profile,{enabled:true,states:[inReview],targets:[{id:'primary'}]});
+  await n.retry(profile,failed.id);assert.equal(calls,2);assert.match(n.status(profile).deliveries.find(x=>x.id===failed.id).error,/已移除/);
+  assert.equal(n.status(profile).hasSecret,true);
+});
+
+test('multi-target deduplication survives delivery-log trimming',async t=>{
+ let calls=0;const f=fixture(t,async()=>{calls++;return Response.json({code:0});});f.options.sleep=async()=>{};const n=f.make();
+ n.configure(profile,{enabled:true,states:[inReview],targets:Array.from({length:10},(_,i)=>({webhook:url.replace('11111111',String(i+1).padStart(8,'0'))}))});f.advance();
+ const events=Array.from({length:60},(_,i)=>({id:'event-'+i,at:new Date(f.options.now()).toISOString(),track:'production',name:'v'+i,versionCodes:[String(i)],after:inReview}));
+ await n.process(profile,events);assert.equal(calls,600);await n.process(profile,events);assert.equal(calls,600);
+});
+
+test('disabling notifications during fanout cancels remaining destinations',async t=>{
+ let finish,calls=0;const f=fixture(t,async()=>{calls++;if(calls>1)return Response.json({code:0});return new Promise(resolve=>{finish=resolve;});});f.options.sleep=async()=>{};const n=f.make();
+ n.configure(profile,{enabled:true,states:[inReview],targets:[{webhook:url},{webhook:url.replace('11111111','99999999')}]});f.advance();
+ const pending=n.process(profile,[{id:'pause-event',at:new Date(f.options.now()).toISOString(),track:'production',name:'v1',versionCodes:['1'],after:inReview}]);
+ try{n.configure(profile,{enabled:false,states:[inReview]});}finally{finish(Response.json({code:0}));await pending;}
+ assert.equal(calls,1);assert.equal(n.status(profile).enabled,false);
+});
+
+test("new profiles require explicit opt-in for review notifications",t=>{const f=fixture(t,async()=>Response.json({code:0}));assert.deepEqual(f.make().status(profile).states,STATES.slice(0,2));});

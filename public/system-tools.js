@@ -72,5 +72,33 @@ async function installUpdate(version){
   setTimeout(poll,500);
 }
 
- return {supportDialog,updateDialog,showUpdateOutcome};
+ let watching=false,timer,checking=false,dismissedVersion='';
+ function startUpdateChecks(){
+  if(watching)return;watching=true;
+  const button=$('update'),original=button.textContent;
+  const dismissKey='gp-update-dismissed-version-v1';
+  try{dismissedVersion=localStorage.getItem(dismissKey)||'';}catch{}
+  async function poll(){
+   if(checking||!watching)return;clearTimeout(timer);checking=true;
+   try{
+    if(document.hidden||adapter.busy?.())return;
+    const release=await api('update/check',{background:true});
+    if(!watching)return;
+    button.textContent=release.available?'检查更新 · 有新版':original;
+    if(!release.available){if($('newUpdateNotice'))$('newUpdateNotice').hidden=true;return;}
+    if(!$('newUpdateNotice')){
+     const banner=document.createElement('section');banner.id='newUpdateNotice';banner.className='banner';banner.setAttribute('role','status');banner.setAttribute('aria-live','polite');
+     banner.innerHTML='<b>发现新版本</b><span id="newUpdateText"></span><button id="viewNewUpdate">查看更新</button><button id="dismissNewUpdate">暂不提醒此版本</button>';
+     document.querySelector('main').prepend(banner);
+     $('viewNewUpdate').onclick=()=>button.click();
+    }
+    $('newUpdateText').textContent='PlayBatch '+release.version+' 已发布，当前版本 '+release.currentVersion+'。';
+    $('newUpdateNotice').hidden=dismissedVersion===release.version;
+    $('dismissNewUpdate').onclick=()=>{dismissedVersion=release.version;try{localStorage.setItem(dismissKey,release.version);}catch{}$('newUpdateNotice').hidden=true;};
+   }catch{}finally{checking=false;if(watching)timer=setTimeout(poll,60*60*1000);}
+  }
+  timer=setTimeout(poll,5000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
+ }
+ return {supportDialog,updateDialog,showUpdateOutcome,startUpdateChecks};
 }};

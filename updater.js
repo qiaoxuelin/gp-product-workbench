@@ -11,7 +11,7 @@ function releaseInfo(value,current){
   if(!asset||asset.browser_download_url!==url||!/^sha256:[a-f0-9]{64}$/.test(asset.digest||'')||!Number.isSafeInteger(asset.size)||asset.size<1||asset.size>MAX)throw Error('新版下载包或 SHA256 校验信息不完整，请前往 GitHub 下载页');
   return {version,available:newer(version,current),url,size:asset.size,sha256:asset.digest.slice(7),notes:String(value.body||'').slice(0,30000),page:'https://github.com/'+REPO+'/releases/tag/v'+version};
 }
-function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,launch=spawn,supported=process.platform==='win32'}){
+function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,launch=spawn,supported=process.platform==='win32',now=()=>Date.now()}){
   const statusFile=path.join(data,'update-status.json');let active=false;
   function status(){let s={phase:'idle'};try{s=JSON.parse(fs.readFileSync(statusFile,'utf8'));}catch{}return {...s,currentVersion:version,supported,page:PAGE,locked:fs.existsSync(path.join(data,'update.lock'))};}
   function save(s){fs.mkdirSync(data,{recursive:true});fs.writeFileSync(statusFile+'.tmp',JSON.stringify({...s,updatedAt:new Date().toISOString()}));fs.renameSync(statusFile+'.tmp',statusFile);}
@@ -25,10 +25,17 @@ function createUpdater({root,data,version,port,pid=process.pid,fetchImpl=fetch,l
   }else if(['checking','downloading','installing'].includes(status().phase)){
     save({phase:'failed',message:'上次更新未完成，可以重新检查更新'});
   }
-  async function check(){
+  async function readRelease(){
     let response;try{response=await fetchImpl('https://api.github.com/repos/'+REPO+'/releases/latest',{headers:{Accept:'application/vnd.github+json','User-Agent':'PlayBatch/'+version},signal:AbortSignal.timeout(30000)});}catch{throw Error('无法连接 GitHub，请检查网络后重试，也可前往下载页手动更新');}
     if(!response.ok)throw Error(response.status===403||response.status===429?'GitHub 请求受限，请稍后重试或前往下载页':'读取 GitHub 版本失败：'+response.status);
     return {...releaseInfo(await response.json(),version),currentVersion:version,supported};
+  }
+  let checkedAt=null,cachedRelease,cachedError,pendingCheck;
+  function check({background=false}={}){
+    if(pendingCheck)return pendingCheck;
+    if(background&&checkedAt!==null&&now()-checkedAt<60*60*1000)return cachedError?Promise.reject(cachedError):Promise.resolve(cachedRelease);
+    pendingCheck=readRelease().then(info=>{cachedRelease=info;cachedError=null;return info;},error=>{cachedError=error;throw error;}).finally(()=>{checkedAt=now();pendingCheck=null;});
+    return pendingCheck;
   }
   async function download(info,job){
     const response=await fetchImpl(info.url,{signal:AbortSignal.timeout(300000)});

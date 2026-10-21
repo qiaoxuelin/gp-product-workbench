@@ -472,6 +472,8 @@ function financeDialog(){
     '<div id="financeFiles" aria-live="polite"><p class="help">选好月份后读取账单。已有商品管理权限不代表具备财务报告权限。</p></div>'+
     '<details class="auth-guide"><summary>首次配置与权限说明</summary><ol><li>打开 Play Console → 下载报告 → 财务，找到收入报告（Earnings）。</li><li>点击该栏目旁的“复制 Cloud Storage URI”，粘贴到上方并保存。通常以 <code>gs://pubsite_prod_rev_</code> 开头。</li><li>在 Play Console 用户和权限中选择当前服务账号：在账号级范围授予查看应用信息/下载批量报告，以及查看财务数据的全局权限。仅授予某个应用的权限可能无法下载账号账单。</li><li>可复用项目中已保存的服务账号 JSON；由管理员补充财务只读权限后重新读取。这里不需要授予退款操作权限。</li></ol><p>报告按 Google 月份下载，可能延迟发布或存在补充调整文件。请核对同月所有文件；原始 ZIP 内的 CSV 通常为 UTF-16，可用 Excel 打开。工具不改写金额、不跨币种汇总。</p><a href="https://support.google.com/googleplay/android-developer/answer/6135870?hl=zh-Hans" target="_blank" rel="noreferrer">Google 官方财务报告与权限说明 ↗</a></details>',
     [{label:'关闭',run:close}]);
+  const syncHost=document.createElement('section');syncHost.className='option-box';syncHost.id='financeSyncPanel';$('financeFiles').after(syncHost);
+  void FinanceSync.mount({host:syncHost,api,esc,job,profiles:settings.profiles,activeId:settings.activeId}).catch(e=>{if(syncHost.isConnected)syncHost.textContent=e.message;});
   let lastList=null;
   const financeJob=async(fn,message)=>{const fields=['financeBucket','financeYear','financeMonth'].map($);fields.forEach(el=>el.disabled=true);try{return await job(fn,message);}finally{fields.forEach(el=>el.disabled=false);}};
 
@@ -514,30 +516,35 @@ async function feishuDialog(profileId=reviewProjectId){
   const state=await job(()=>api('monitor/feishu/status',{mode:'live',profileId}),'正在读取飞书通知配置…');
   modal('飞书群通知 · '+profile.name,'<p>为当前项目配置群机器人。启用后仅发送新检测到的状态变化；首次审核查询建立基线，不补发历史状态。</p><div class="form-grid">'+
     '<label class="checkline wide"><input type="checkbox" id="feishuEnabled" '+(state.enabled?'checked':'')+'>启用飞书自动通知</label>'+
-    '<label class="field wide">机器人 Webhook<input id="feishuWebhook" type="password" autocomplete="new-password" placeholder="'+(state.hasWebhook?'已加密保存，留空保留；填写新地址可替换':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label>'+
-    '<label class="field wide">签名校验密钥（可选）<input id="feishuSecret" type="password" autocomplete="new-password" placeholder="'+(state.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label>'+
-    '<label class="checkline wide"><input id="feishuClearSecret" type="checkbox">清除已保存的签名密钥（机器人关闭签名时使用）</label>'+
-    '<fieldset class="wide"><legend>通知时机</legend><label class="checkline"><input id="feishuApproved" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED')?'checked':'')+'>审核通过，等待发布</label><label class="checkline"><input id="feishuPublished" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_PUBLISHED')?'checked':'')+'>已经发布</label></fieldset>'+
+    '<div class="wide" id="feishuTargets"></div><button type="button" id="feishuAddTarget">＋ 添加群机器人</button>'+
+    '<fieldset class="wide"><legend>通知时机</legend><label class="checkline"><input id="feishuInReview" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_IN_REVIEW')?'checked':'')+'>已提审，审核中</label><label class="checkline"><input id="feishuApproved" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED')?'checked':'')+'>审核通过，等待发布</label><label class="checkline"><input id="feishuPublished" type="checkbox" '+(state.states.includes('RELEASE_LIFECYCLE_STATE_PUBLISHED')?'checked':'')+'>已经发布</label></fieldset>'+
     '<label class="checkline wide"><input id="feishuMentionAll" type="checkbox" '+(state.mentionAll?'checked':'')+'>通知时 @全体成员</label></div>'+
     '<p class="help">@全体成员默认关闭，按项目保存。开启后，自动通知和测试通知都会提醒全体成员；群内需允许机器人 @所有人。测试使用已保存设置；重试保留原消息的 @ 提醒。</p>'+
-    '<p class="help">本机加密保存 Webhook 和密钥，不回显。启用通知也需要在上一页启用审核监控，并保持本机后台服务运行。</p>'+
+    '<p class="help">最多配置 10 个群机器人，分别推送并记录结果；失败只需重试对应机器人。本机加密保存 Webhook 和密钥，不回显。启用通知也需要在上一页启用审核监控，并保持本机后台服务运行。</p>'+
     '<details><summary>如何准备飞书机器人？</summary><ol><li>在接收通知的飞书群中打开“设置 → 群机器人 → 添加机器人 → 自定义机器人”。</li><li>复制 Webhook 到上方；若开启签名校验，一并填写签名密钥。</li><li>若使用关键词限制，添加关键词 PlayBatch。若使用 IP 白名单，需允许本机网络的出口 IP。</li><li>保存后点击测试通知，在群里确认收到。</li></ol><p><a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot" target="_blank" rel="noreferrer">飞书官方配置指南 ↗</a></p></details>'+
     '<div class="finance-actions"><button id="feishuSave">保存通知设置</button><button id="feishuTest">发送测试通知到群</button></div><div id="feishuResults"></div>',
     [{label:'返回审核监控',run:close},{label:'关闭',run:close}]);
+  let robots=state.targets?.length?state.targets:[{id:'primary',name:'群机器人 1',hasWebhook:state.hasWebhook,hasSecret:state.hasSecret}];
+  const readRobots=()=>robots.map((r,i)=>({...r,name:$('feishuName'+i).value.trim(),webhook:$(i?'feishuWebhook'+i:'feishuWebhook').value.trim(),secret:$(i?'feishuSecret'+i:'feishuSecret').value.trim(),clearSecret:$(i?'feishuClearSecret'+i:'feishuClearSecret').checked}));
+  function drawRobots(){
+    $('feishuTargets').innerHTML=robots.map((r,i)=>'<fieldset><legend>'+esc(r.name||('群机器人 '+(i+1)))+'</legend><div class="form-grid"><label class="field wide">备注名称<input id="feishuName'+i+'" value="'+esc(r.name||'')+'"></label><label class="field wide">机器人 Webhook<input type="password" autocomplete="new-password" id="'+(i?'feishuWebhook'+i:'feishuWebhook')+'" value="'+esc(r.webhook||'')+'" placeholder="'+(r.hasWebhook?'已加密保存，留空保留':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label><label class="field wide">签名密钥（可选）<input type="password" autocomplete="new-password" id="'+(i?'feishuSecret'+i:'feishuSecret')+'" value="'+esc(r.secret||'')+'" placeholder="'+(r.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label><label class="checkline wide"><input type="checkbox" id="'+(i?'feishuClearSecret'+i:'feishuClearSecret')+'" '+(r.clearSecret?'checked':'')+'>清除已保存的签名密钥</label></div>'+(robots.length>1?'<button type="button" data-remove-robot="'+i+'">移除此机器人</button>':'')+'</fieldset>').join('');
+    document.querySelectorAll('[data-remove-robot]').forEach(button=>button.onclick=()=>{robots=readRobots();robots.splice(Number(button.dataset.removeRobot),1);drawRobots();});
+  }
+  drawRobots();bind('feishuAddTarget',()=>{if(robots.length>=10)throw Error('最多配置 10 个群机器人');robots=readRobots();robots.push({name:'群机器人 '+(robots.length+1)});drawRobots();});
   const draw=s=>{
     const names={pending:'待发送',sending:'发送中',sent:'已发送',failed:'发送失败',uncertain:'结果不明'};
-    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+feishuText(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
+    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+(d.targetName||'群机器人 1')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+feishuText(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
     s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+feishuText(d.text)+'</pre>',[{label:'返回',run:()=>feishuDialog(profileId)},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode:'live',profileId,id:d.id}),'正在重试发送…');await feishuDialog(profileId);}}]));});
   };
   draw(state);
   bind('feishuSave',async()=>{
-    const states=[];if($('feishuApproved').checked)states.push('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED');if($('feishuPublished').checked)states.push('RELEASE_LIFECYCLE_STATE_PUBLISHED');
-    const payload={mode:'live',profileId,enabled:$('feishuEnabled').checked,mentionAll:$('feishuMentionAll').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
+    const states=[];if($('feishuInReview').checked)states.push('RELEASE_LIFECYCLE_STATE_IN_REVIEW');if($('feishuApproved').checked)states.push('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED');if($('feishuPublished').checked)states.push('RELEASE_LIFECYCLE_STATE_PUBLISHED');
+    const payload={targets:readRobots(),mode:'live',profileId,enabled:$('feishuEnabled').checked,mentionAll:$('feishuMentionAll').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
     const result=await job(()=>api('monitor/feishu/config',payload),'正在加密保存通知设置…');
-    $('feishuWebhook').value='';$('feishuSecret').value='';$('feishuClearSecret').checked=false;
+    robots=result.targets?.length?result.targets:[{id:'primary',name:'群机器人 1',hasWebhook:result.hasWebhook,hasSecret:result.hasSecret}];drawRobots();
     $('feishuWebhook').placeholder=result.hasWebhook?'已加密保存，留空保留':'请输入 Webhook';$('feishuSecret').placeholder=result.hasSecret?'已保存，留空保留':'可选签名密钥';draw(result);status('飞书通知设置已保存');
   });
-  bind('feishuTest',async()=>{const result=await job(()=>api('monitor/feishu/test',{mode:'live',profileId}),'正在向已保存的飞书群发送测试通知…');draw(result);status(result.deliveries[0]?.status==='sent'?'测试通知已发送，请查看飞书群':'测试未确认成功，请查看发送记录',result.deliveries[0]?.status!=='sent');});
+  bind('feishuTest',async()=>{const result=await job(()=>api('monitor/feishu/test',{mode:'live',profileId}),'正在向已保存的飞书群发送测试通知…');draw(result);status(result.deliveries.filter(d=>d.kind==='test').slice(0,robots.length).every(d=>d.status==='sent')?'测试通知已发送，请查看各飞书群':'部分测试未确认成功，请查看各机器人的发送记录');});
 }
 
 async function reviewMonitorDialog(requestedId){
@@ -590,10 +597,10 @@ let systemTools;
 const supportDialog=()=>systemTools.supportDialog(),updateDialog=()=>systemTools.updateDialog(),showUpdateOutcome=version=>systemTools.showUpdateOutcome(version);
 
 async function init(){
-  systemTools=SystemTools.create({esc,api,modal,close,status,job,download,demo:()=>workspace.enterDemo(),persist:()=>localStorage.setItem(key(),JSON.stringify({base,draft,states})),setWorking:value=>{working=value;},render:syncActions});
+  systemTools=SystemTools.create({busy:()=>working,esc,api,modal,close,status,job,download,demo:()=>workspace.enterDemo(),persist:()=>localStorage.setItem(key(),JSON.stringify({base,draft,states})),setWorking:value=>{working=value;},render:syncActions});
   const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
   bind('about',()=>modal('关于 PlayBatch','<h3>跨平台商品工作台</h3><p>由 <a href="https://github.com/qiaoxuelin" target="_blank" rel="noreferrer">qiaoxuelin</a> 开发</p><p>当前版本：'+esc(session.version||'未知')+'</p><p>同一项目下分别管理 Google Play 与 App Store 商品、授权和草稿。</p>',[{label:'关闭',run:close}]));settings=await api('config');await restoreVisit();restore();
-  bind('reviewMonitor',reviewMonitorDialog);bind('update',updateDialog);bind('finance',financeDialog);bind('support',supportDialog);
+  bind('reviewMonitor',reviewMonitorDialog);bind('update',updateDialog);systemTools.startUpdateChecks();bind('finance',financeDialog);bind('support',supportDialog);
   bind('newProject',()=>openSettings(''));bind('settings',()=>workspace?workspace.configure():openSettings());bind('refresh',refresh);bind('create',newProduct);bind('copy',copyProducts);bind('price',priceDialog);bind('import',importDialog);bind('languages',languageDialog);bind('export',exportDialog);bind('preview',preview);bind('activate',()=>changeState('ACTIVE'));bind('deactivate',()=>changeState('INACTIVE'));bind('discard',discard);bind('history',history);bind('closeModal',close);
   $('modal').addEventListener('cancel',e=>{if(working)e.preventDefault();else if($('modal').returnToEditor){e.preventDefault();close();}});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{catalogFilter=b.dataset.filter;render();});

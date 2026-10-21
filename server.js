@@ -22,6 +22,8 @@ let config=settings.profiles.find(p=>p.id===settings.activeId)||{packageName:'',
 const googleClient=require('./google-client').createGoogleClient({getProfile:()=>config,loadCredential:profile=>Cred.loadCredential(DATA,profile)});
 const {accessToken,request:google}=googleClient;
 const finance=Finance.createFinance(accessToken);
+const SyncLark=require('./finance-sync-lark'),syncDestination=SyncLark.createDestination();
+const financeSync=require('./finance-sync').createFinanceSync({read,save,profiles:()=>settings.profiles,sourceFor:profile=>Finance.createFinance(scope=>accessToken(scope,profile)),destination:syncDestination});
 const products=require('./google-products').createGoogleProducts({getProfile:()=>config,google,read,save,schemas:SCHEMAS});
 const {packageFor,listProducts,conversion,preview,commit,recoverOperation}=products;
 const {projectContains,checkTransitions}=require('./google-product-rules');
@@ -34,6 +36,16 @@ async function checkReview(id){
 }
 const workspaceProjects=require('./workspace-projects').createWorkspaceProjects({read,save,googleProfiles:()=>publicSettings().profiles,appleProfiles:()=>apple.publicSettings().profiles});
 async function route(url,b) {
+  if(url==='/api/finance-sync/status')return {...financeSync.status(),cliAvailable:SyncLark.cliAvailable()};
+  if(url==='/api/finance-sync/config')return financeSync.configure(b);
+  if(url==='/api/finance-sync/check'){const result=await syncDestination.inspect(b.url);return {title:result.title,sheets:result.sheets.map(s=>s.sheet_name)};}
+  if(url==='/api/finance-sync/start'){
+    const state=financeSync.status(),profile=settings.profiles.find(p=>p.id===state.config.profileId);
+    if(financeSync.isActive())throw Error('账单同步已在运行');
+    if(!profile?.financialBucket||!(profile.credentialFile||profile.credentialPath))throw Error('请先保存财务报告桶地址并配置服务账号');
+    void financeSync.run().catch(()=>{});return {started:true};
+  }
+  if(financeSync.isActive()&&['/api/update/start','/api/system/quit'].includes(url))throw Error('正在同步账单，请完成后再更新或退出');
   if(url==='/api/projects')return workspaceProjects.snapshot();
   if(url==='/api/projects/save')return workspaceProjects.update(b);
   if(url.startsWith('/api/apple/'))return apple.route(url,b);
@@ -44,7 +56,7 @@ async function route(url,b) {
     setTimeout(()=>{server.close();server.closeAllConnections();if(require.main===module)process.exit(0);},300);
     return {stopping:true};
   }
-  if(url==='/api/update/check')return updater.check();
+  if(url==='/api/update/check')return updater.check({background:b.background===true});
   if(url==='/api/update/status')return updater.status();
   if(url==='/api/update/start')return updater.begin(b.version);
   if(url==='/api/monitor/summary')return {projects:monitor.summary()};
@@ -153,25 +165,25 @@ const server=http.createServer(async(req,res)=>{
   if(req.headers.origin&&!['http://127.0.0.1:'+PORT,'http://localhost:'+PORT].includes(req.headers.origin))return send(res,403,{error:'禁止跨站访问'});
   const url=new URL(req.url,'http://'+host).pathname;
   if(req.method==='GET'&&url==='/api/session')return send(res,200,{token:SESSION,application:'gp-product-workbench',version:APP_VERSION});
-  if(req.method==='GET'&&['/','/app.js','/style.css','/apple.html','/apple.js','/workspace-shell.js','/system-tools.js','/playbatch-icon-v1.png'].includes(url)){
+  if(req.method==='GET'&&['/','/app.js','/style.css','/apple.html','/apple.js','/workspace-shell.js','/system-tools.js','/finance-sync.js','/playbatch-icon-v1.png'].includes(url)){
     const file=url==='/'?'index.html':url.slice(1),type=file.endsWith('.png')?'image/png':file.endsWith('.html')?'text/html':file.endsWith('.js')?'text/javascript':'text/css';
     return send(res,200,fs.readFileSync(path.join(ROOT,'public',file)),type+'; charset=utf-8');
   }
   if(req.method!=='POST'||req.headers['x-gp-token']!==SESSION)return send(res,403,{error:'请从本机工具页面操作'});
   if(!(req.headers['content-type']||'').startsWith('application/json'))return send(res,415,{error:'需要 JSON'});
   // Support reads remain available while an update or business operation runs.
-  if(['/api/system/status','/api/system/diagnostics'].includes(url)){
+  if(['/api/system/status','/api/system/diagnostics','/api/finance-sync/status'].includes(url)){
     try{return send(res,200,await route(url,{}));}catch(e){return send(res,400,{error:e.message});}
   }
   if(updater.isActive()&&url!=='/api/update/status')return send(res,409,{error:'正在更新，请等待重启完成'});
-  if(busy)return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
+  if(busy&&url!=='/api/update/check')return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
   let text='';try{
     for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>8*1024*1024)throw Error('请求超过 8MB，请分批处理');}
     const body=JSON.parse(text||'{}');
     // Recheck after asynchronous request parsing to serialize mutations.
     if(updater.isActive()&&url!=='/api/update/status')return send(res,409,{error:'正在更新，请等待重启完成'});
-    if(busy)return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
-    busy=true;
+    if(busy&&url!=='/api/update/check')return send(res,409,{error:'正在处理另一项操作，请稍后重试'});
+    const passive=url==='/api/update/check';if(!passive)busy=true;
     try{
       const result=await route(url,body);
       if(result?._download){
@@ -179,11 +191,12 @@ const server=http.createServer(async(req,res)=>{
         res.writeHead(200,{'Content-Type':file.type||(file.name.endsWith('.zip')?'application/zip':'text/csv'),'Content-Disposition':'attachment; filename="'+file.name+'"','Content-Length':file.bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-File-SHA256':file.sha256||crypto.createHash('sha256').update(file.bytes).digest('hex')});
         res.end(file.bytes);
       }else send(res,200,result);
-    }finally{busy=false;}
+    }finally{if(!passive)busy=false;}
   }catch(e){send(res,400,{error:e.message});}
 });
 if(require.main===module){
   server.listen(PORT,'127.0.0.1',()=>console.log('GP Product Workbench: http://127.0.0.1:'+PORT));
+  const syncTimer=setInterval(()=>{if(!busy&&!updater.isActive()&&financeSync.due())void financeSync.run().catch(()=>{});},60000);syncTimer.unref();server.on('close',()=>clearInterval(syncTimer));
   let monitorChecking=false;
   const monitorTimer=setInterval(async()=>{
     if(busy||monitorChecking||updater.isActive())return;
