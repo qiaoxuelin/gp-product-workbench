@@ -134,3 +134,34 @@ test('disabling notifications during fanout cancels remaining destinations',asyn
 });
 
 test("new profiles require explicit opt-in for review notifications",t=>{const f=fixture(t,async()=>Response.json({code:0}));assert.deepEqual(f.make().status(profile).states,STATES.slice(0,2));});
+
+test('unreadable credentials can be replaced without losing identities or delivery history',async t=>{
+  const bodies=[],f=fixture(t,async(target,opts)=>{bodies.push({target,body:JSON.parse(opts.body)});return Response.json({code:0});});
+  f.options.sleep=async()=>{};let n=f.make();
+  n.configure(profile,{enabled:true,states:STATES,targets:[{webhook:url,secret:'old'},{webhook:url.replace('11111111','99999999')}]});
+  await n.test(profile);
+  const saved=n.status(profile),disk=JSON.parse(fs.readFileSync(f.options.file,'utf8'));
+  disk.one.sealed='unreadable';fs.writeFileSync(f.options.file,JSON.stringify(disk));
+  f.options.protect=(value,decode)=>{if(decode&&value==='unreadable')throw Error('DPAPI failure');return protect(value,decode);};n=f.make();
+  const original=fs.readFileSync(f.options.file,'utf8');
+  const save=targets=>n.configure(profile,{enabled:true,states:STATES,targets});
+  assert.throws(()=>save(saved.targets.map(x=>({id:x.id}))),/无法解密/);
+  assert.throws(()=>save([{id:saved.targets[0].id,webhook:url},{id:saved.targets[1].id,webhook:url.replace('11111111','99999999')}]),/签名密钥/);
+  assert.throws(()=>save([{id:saved.targets[0].id,webhook:url,secret:'new'},{id:saved.targets[1].id}]),/Webhook/);
+  assert.equal(fs.readFileSync(f.options.file,'utf8'),original);
+  assert.deepEqual(n.status(profile),saved);
+  const result=save(saved.targets.map((x,i)=>({id:x.id,webhook:i?url.replace('11111111','99999999'):url,secret:i?'':'replacement'})));
+  assert.deepEqual(result.targets.map(x=>x.id),saved.targets.map(x=>x.id));assert.deepEqual(result.deliveries,saved.deliveries);
+  n=f.make();await n.test(profile);assert.equal(bodies.length,4);
+  assert.equal(bodies[2].body.sign,sign(bodies[2].body.timestamp,'replacement'));assert.equal(bodies[3].body.sign,undefined);
+});
+
+test('legacy unreadable credentials require replacement or explicit signature clearing',t=>{
+  const f=fixture(t,async()=>Response.json({code:0}));
+  fs.writeFileSync(f.options.file,JSON.stringify({one:{packageName:profile.packageName,enabled:true,states:STATES,enabledSince:0,hasSecret:true,sealed:'broken',deliveries:[]}}));
+  f.options.protect=(value,decode)=>{if(decode&&value==='broken')throw Error('DPAPI failure');return protect(value,decode);};
+  const n=f.make();assert.throws(()=>n.configure(profile,{enabled:true,states:STATES,webhook:url}),/签名密钥/);
+  n.configure(profile,{enabled:true,states:STATES,webhook:url,clearSecret:true});
+  assert.equal(f.make().status(profile).hasSecret,false);
+  assert.equal(JSON.parse(protect(JSON.parse(fs.readFileSync(f.options.file,'utf8')).one.sealed,true)).targets[0].webhook,url);
+});
