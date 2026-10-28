@@ -22,6 +22,7 @@ let config=settings.profiles.find(p=>p.id===settings.activeId)||{packageName:'',
 const googleClient=require('./google-client').createGoogleClient({getProfile:()=>config,loadCredential:profile=>Cred.loadCredential(DATA,profile)});
 const {accessToken,request:google}=googleClient;
 const finance=Finance.createFinance(accessToken);
+const reporting=require('./play-reporting').createReporting({accessToken});
 const SyncLark=require('./finance-sync-lark'),syncDestination=SyncLark.createDestination();
 const financeSync=require('./finance-sync').createFinanceSync({read,save,profiles:()=>settings.profiles,sourceFor:profile=>Finance.createFinance(scope=>accessToken(scope,profile)),destination:syncDestination});
 const products=require('./google-products').createGoogleProducts({getProfile:()=>config,google,read,save,schemas:SCHEMAS});
@@ -59,6 +60,10 @@ async function route(url,b) {
   if(url==='/api/update/check')return updater.check({background:b.background===true});
   if(url==='/api/update/status')return updater.status();
   if(url==='/api/update/start')return updater.begin(b.version);
+  if(url==='/api/reporting/search'){
+    if(b.mode!=='live'||!config.id||b.profileId!==config.id)throw Error('请选择当前真实 Google Play 项目');
+    return reporting.search(C.clone(config),b);
+  }
   if(url==='/api/monitor/summary')return {projects:monitor.summary()};
   if(url.startsWith('/api/monitor/')){
     const profile=settings.profiles.find(p=>p.id===b.profileId);
@@ -165,7 +170,7 @@ const server=http.createServer(async(req,res)=>{
   if(req.headers.origin&&!['http://127.0.0.1:'+PORT,'http://localhost:'+PORT].includes(req.headers.origin))return send(res,403,{error:'禁止跨站访问'});
   const url=new URL(req.url,'http://'+host).pathname;
   if(req.method==='GET'&&url==='/api/session')return send(res,200,{token:SESSION,application:'gp-product-workbench',version:APP_VERSION});
-  if(req.method==='GET'&&['/','/app.js','/style.css','/apple.html','/apple.js','/workspace-shell.js','/system-tools.js','/finance-sync.js','/playbatch-icon-v1.png'].includes(url)){
+  if(req.method==='GET'&&['/','/app.js','/style.css','/play-reporting.js','/play-reporting.css','/apple.html','/apple.js','/workspace-shell.js','/system-tools.js','/finance-sync.js','/playbatch-icon-v1.png'].includes(url)){
     const file=url==='/'?'index.html':url.slice(1),type=file.endsWith('.png')?'image/png':file.endsWith('.html')?'text/html':file.endsWith('.js')?'text/javascript':'text/css';
     return send(res,200,fs.readFileSync(path.join(ROOT,'public',file)),type+'; charset=utf-8');
   }

@@ -596,6 +596,10 @@ async function refreshReviewBadge(){
 let systemTools;
 const supportDialog=()=>systemTools.supportDialog(),updateDialog=()=>systemTools.updateDialog(),showUpdateOutcome=version=>systemTools.showUpdateOutcome(version);
 
+async function reportingPage(){
+ const profileId=settings.activeId,packageName=settings.current.packageName;
+ PlayReporting.mount({page:featurePage,esc,job,status,packageName,api:(url,b={})=>api(url,{...b,mode:'live',profileId})});
+}
 async function init(){
   systemTools=SystemTools.create({busy:()=>working,esc,api,modal,close,status,job,download,demo:()=>workspace.enterDemo(),persist:()=>localStorage.setItem(key(),JSON.stringify({base,draft,states})),setWorking:value=>{working=value;},render:syncActions});
   const session=await(await fetch('/api/session')).json();token=session.token;$('appVersion').textContent='PlayBatch v'+(session.version||'未知');
@@ -611,7 +615,7 @@ async function init(){
   $('selectAll').onchange=e=>{visibleProducts().forEach(p=>e.target.checked?selected.add(p.productId):selected.delete(p.productId));render();};
   $('mode').onchange=async()=>{if(working)return;persist();mode=$('mode').value;restore();if(workspace)await workspace.refreshMode();status('已切换工作区');if(mode==='demo'&&!draft.length){try{await loadProducts();}catch(e){showError(e.message);}}};
   $('project').onchange=async()=>{if(working)return;try{persist();settings=await api('config/switch',{id:$('project').value});restore();status('已切换到 '+settings.current.name+'；点击读取商品加载此项目');}catch(e){showError(e.message);render();}};
-  workspace=await WorkspaceShell.mount({platform:'google',canLeaveFeature,openFeature:feature=>feature==='monitor'?reviewMonitorDialog():financeDialog(),busy:()=>working,persist,profileId:()=>settings.activeId,isDemo:()=>mode==='demo',modal,close,error:e=>showError(e.message),status,
+  workspace=await WorkspaceShell.mount({platform:'google',canLeaveFeature,openFeature:feature=>feature==='monitor'?reviewMonitorDialog():feature==='reporting'?reportingPage():financeDialog(),busy:()=>working,persist,profileId:()=>settings.activeId,isDemo:()=>mode==='demo',modal,close,error:e=>showError(e.message),status,
     configure:(id,name)=>{openSettings(id);if(!id)$('profileName').value=name;},
     select:async(id,initial=false)=>{const demo=initial&&mode==='demo'&&!new URL(location.href).searchParams.has('live');if(!id){if(demo)return;settings={...settings,activeId:'',current:{}};mode='live';$('mode').value=mode;base=[];draft=[];states={};selected.clear();render();return;}
       if(settings.activeId!==id){settings=await api('config/switch',{id});}if(!demo){mode='live';$('mode').value=mode;}restore();}

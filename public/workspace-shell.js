@@ -5,7 +5,7 @@ window.WorkspaceShell=(()=>{
  const names={google:'Google Play',apple:'App Store'},urls={google:'/',apple:'/apple.html'},storageKey='playbatch-project-v1';
  async function mount(adapter){
   let state,activeId='',pending=false;
-  const features={products:'商品管理',monitor:'审核与发布监控',billing:'账单导出'};
+  const features={products:'商品管理',monitor:'审核与发布监控',billing:'账单导出',reporting:'崩溃与 ANR 报告'};
   let feature=new URL(location.href).searchParams.get('feature')||'products';if(!Object.hasOwn(features,feature))feature='products';
   const host=document.getElementById('workspaceShell');
   const platformTools=document.querySelector('.platform-tools');

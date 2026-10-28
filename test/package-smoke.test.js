@@ -22,8 +22,10 @@ test('release whitelist runs independently and serves both platform workspaces',
  });
  const port=await new Promise((resolve,reject)=>{child.stdout.once('data',d=>resolve(Number(String(d).trim())));child.once('exit',code=>reject(Error('Staged server exited '+code+': '+stderr)));child.once('error',reject);});
  const origin='http://127.0.0.1:'+port;
- for(const file of ['/','/apple.html','/app.js','/apple.js','/workspace-shell.js','/system-tools.js','/style.css']){const response=await fetch(origin+file);assert.equal(response.status,200,file);assert((await response.text()).length>100);}
+ for(const file of ['/','/apple.html','/app.js','/apple.js','/workspace-shell.js','/system-tools.js','/style.css','/play-reporting.js','/play-reporting.css']){const response=await fetch(origin+file);assert.equal(response.status,200,file);assert((await response.text()).length>100);}
  const icon=await fetch(origin+'/playbatch-icon-v1.png');assert.equal(icon.status,200);assert(icon.headers.get('content-type').startsWith('image/png'));assert.deepEqual(Buffer.from(await icon.arrayBuffer()).subarray(0,8),Buffer.from([137,80,78,71,13,10,26,10]));
  const session=await(await fetch(origin+'/api/session')).json();assert.equal(session.application,'gp-product-workbench');
+ for(const body of [{mode:'demo',profileId:'wrong'},{mode:'live',profileId:'wrong'}]){const result=await fetch(origin+'/api/reporting/search',{method:'POST',headers:{'Content-Type':'application/json','X-GP-Token':session.token},body:JSON.stringify(body)});assert.equal(result.status,400);assert.match((await result.json()).error,/当前真实 Google Play 项目/);}
+ const unauthed=await fetch(origin+'/api/reporting/search',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(unauthed.status,403);
  assert(fs.existsSync(path.join(stage,'docs','apple-iap.md')));assert.equal(stderr,'');
 });

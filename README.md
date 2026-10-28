@@ -259,3 +259,15 @@ v0.1.3 的验证覆盖 CSV 编码和格式行号、提交步骤、失败后只�
 审核监控可独立选择项目，记住上次查看的监控项目，不改变商品页的项目、模式或草稿。飞书通知配置跟随审核监控中选择的项目；切换前有未保存的监控设置时会提示。
 
 审核监控遇到版本查询配额超限（包括 quota 类 403、429）时，会保留上次成功结果，并按至少 15、30、60 分钟逐步延后重试；手动检查、保存配置及重启不会绕过冷却。界面显示下次允许查询的时间，不代表 Google 配额届时一定恢复。请在服务账号所属 Cloud 项目的 Google Play Android Developer API 配额页面核对用量；配额错误不应按缺少应用权限处理。
+
+### 崩溃与 ANR 详细报告
+
+在当前项目的 Google Play 工作台选择“崩溃与 ANR 报告”。先在服务账号所属 Cloud 项目启用 Google Play Developer Reporting API，并在 Play Console 为该账号授予目标应用的“查看应用信息（只读）”权限；复用项目已有服务账号凭据，授权范围独立于 Android Publisher API。
+
+手动查询默认最近 24 个完整 UTC 小时，起始包含、结束不包含；单次最多 31 天。支持崩溃/ANR、versionCode、Android API 等级和问题 ID 筛选。每次读取 50 条，可手动加载下一页；单次页面最多保留 1000 条，更多报告请缩小范围。展开报告可查看 Google 返回的堆栈和设备信息，下载单份 TXT 或导出已加载的 JSON；JSON 的 hasMore 标记是否仍有未加载页面。查询失败保留上次成功结果及其范围。报告仅保留在当前页面内存，切换项目或离开页面后清空；不新增自动轮询，不自动发送报告。配额受限时当前进程会暂缓该应用查询至少 60 秒。
+
+Google 会去重合并报告，因此条数不等于崩溃次数或受影响用户数，空结果也不代表崩溃率为零。堆栈按 Google 返回文本展示，不额外进行本地符号化；本功能不提供崩溃率/ANR 率汇总指标。
+
+接口依据：[报告查询](https://developers.google.com/play/developer/reporting/reference/rest/v1beta1/vitals.errors.reports/search)、[报告内容与权限](https://developers.google.com/play/developer/reporting/reference/rest/v1beta1/vitals.errors.reports)。
+
+支持最近 24 小时 / 7 天 / 30 天快捷范围、高级筛选、已加载报告关键词搜索与堆栈复制。翻页保留展开状态；关键词搜索不调用 Google，导出始终包含全部已加载报告。
