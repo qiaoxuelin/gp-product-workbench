@@ -72,6 +72,7 @@ async function route(url,b) {
     if(url==='/api/monitor/feishu/config')return notifications.configure(profile,b);
     if(url==='/api/monitor/feishu/test')return notifications.test(profile);
     if(url==='/api/monitor/feishu/retry')return notifications.retry(profile,b.id);
+    if(url==='/api/monitor/feishu/send-to-target')return notifications.sendToTarget(profile,b.id,b.targetId);
     if(url==='/api/monitor/status')return monitor.status(profile.id);
     if(url==='/api/monitor/config')return monitor.configure(profile.id,b);
     if(url==='/api/monitor/check')return checkReview(profile.id);

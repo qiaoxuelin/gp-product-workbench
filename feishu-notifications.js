@@ -79,6 +79,8 @@ function createNotifier({file,protect,fetchImpl=fetch,now=()=>Date.now(),sleep=m
     write();
   }
   function process(profile,events){
+    // A manual delivery may overlap a scheduled check. Process the collected events once it finishes.
+    if(active.has(profile.id))return active.get(profile.id).then(()=>process(profile,events),()=>process(profile,events));
     return exclusive(profile.id,async()=>{
       const s=current(profile);if(!s.enabled||!s.sealed)return status(profile);
       const seen=new Set(s.deliveries.map(d=>d.id)),retained=s.seenEventTargets||{},marks=Object.create(null);
@@ -118,6 +120,26 @@ function createNotifier({file,protect,fetchImpl=fetch,now=()=>Date.now(),sleep=m
     if(active.has(profile.id))throw Error('正在发送通知，请稍后再试');
     return exclusive(profile.id,async()=>{const entry=current(profile).deliveries.find(d=>d.id===id);if(!entry||!['failed','uncertain'].includes(entry.status))throw Error('该通知不可重试');await deliver(profile,id);return status(profile);});
   }
-  return {configure,status,process,test,retry};
+  function sendToTarget(profile,sourceId,targetId){
+    if(active.has(profile.id))throw Error('正在发送通知，请稍后再试');
+    return exclusive(profile.id,async()=>{
+      const s=current(profile);
+      const source=s.deliveries.find(entry=>entry.id===sourceId);
+      if(!source||!source.text)throw Error('找不到这条通知，请刷新记录');
+      const target=targetInfo(s).find(entry=>entry.id===targetId);
+      if(!target||!s.sealed)throw Error('请选择当前项目已保存的群机器人');
+      const entry={
+        id:'manual-'+crypto.randomUUID(),kind:'manual',sourceId,
+        targetId:target.id,targetName:target.name,text:source.text,
+        status:'sending',at:new Date(now()).toISOString()
+      };
+      s.deliveries.unshift(entry);
+      await deliver(profile,entry.id);
+      s.deliveries=s.deliveries.slice(0,500);
+      write();
+      return status(profile);
+    });
+  }
+  return {configure,status,process,test,retry,sendToTarget};
 }
 module.exports={createNotifier,webhook,sign,STATES,message};

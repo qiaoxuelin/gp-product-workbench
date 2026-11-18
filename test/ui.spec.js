@@ -611,6 +611,37 @@ test('checking submission confirmation clears its stale error without sending au
 });
 
 
+test('a single recent notification can be sent to an explicitly selected group',async({page})=>{
+ const p={id:'notify-single',name:'示例项目',packageName:'com.test.single',hasCredential:true};
+ await mockProjects(page,'google',[p]);
+ await page.route('**/api/config',r=>r.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));
+ await page.addInitScript(()=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:'notify-single'})));
+ await page.route('**/api/products',r=>r.fulfill({json:{products:[]}}));
+ await page.route('**/api/monitor/status',r=>r.fulfill({json:{enabled:false,tracks:['production'],intervalMinutes:5,snapshot:[],events:[]}}));
+ const targets=[{id:'primary',name:'发行群'},{id:'qa',name:'测试群'}];
+ const deliveries=['1.1','1.0'].map(version=>({id:version,text:'版本 '+version+' 已发布',status:'sent',targetName:'发行群',kind:'event'}));
+ const state={enabled:false,states:[],targets,hasWebhook:true,deliveries};
+ const requests=[];
+ await page.route('**/api/monitor/feishu/status',r=>r.fulfill({json:state}));
+ await page.route('**/api/monitor/feishu/send-to-target',r=>{
+   requests.push(r.request().postDataJSON());
+   return r.fulfill({json:{...state,deliveries:[{...deliveries[1],id:'manual',kind:'manual',targetName:'测试群'},...deliveries]}});
+ });
+ await page.goto('/');
+ await page.locator('#reviewMonitor').click();
+ await page.locator('#reviewFeishu').click();
+ const row=page.locator('#feishuResults .result-row').filter({hasText:'版本 1.0 已发布'});
+ await row.getByText('发送到指定群').click();
+ await row.getByRole('button',{name:'确认发送'}).click();
+ await expect(page.locator('#modalError')).toContainText('请先选择接收群');
+ await row.getByLabel('接收群').selectOption('qa');
+ expect(requests).toHaveLength(0);
+ await row.getByRole('button',{name:'确认发送'}).click();
+ await expect(page.locator('#feishuResults .result-row').first()).toContainText('手动发送 · 测试群 · 已发送');
+ await expect(page.locator('#modalError')).toHaveCount(0);
+ expect(requests).toEqual([{mode:'live',profileId:p.id,id:'1.0',targetId:'qa'}]);
+});
+
 test('multiple Feishu webhooks and in-review state can be configured without sending',async({page})=>{
  const p={id:'notify-multi',name:'Multi',packageName:'com.test.multi',hasCredential:true};
  await mockProjects(page,'google',[p]);await page.route('**/api/config',r=>r.fulfill({json:{profiles:[p],activeId:p.id,current:p}}));

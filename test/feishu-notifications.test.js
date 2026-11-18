@@ -5,7 +5,66 @@ const url='https://open.feishu.cn/open-apis/bot/v2/hook/11111111-2222-3333-4444-
 const profile={id:'one',name:'App One',packageName:'com.one'};
 const protect=(value,decrypt)=>decrypt?Buffer.from(value,'base64').toString():Buffer.from(value).toString('base64');
 const inReview='RELEASE_LIFECYCLE_STATE_IN_REVIEW';
+test('manual delivery sends the selected original text to one saved group with its own signature',async t=>{
+  const requests=[];
+  const otherUrl=url.replace('11111111','99999999');
+  const f=fixture(t,async(target,options)=>{
+    requests.push({target,body:JSON.parse(options.body)});
+    return Response.json({code:0});
+  });
+  f.options.sleep=async()=>{};
+  let n=f.make();
+  const config=n.configure(profile,{enabled:true,mentionAll:true,states:STATES,targets:[
+    {name:'原群',webhook:url},{name:'接收群',webhook:otherUrl,secret:'receiver'}
+  ]});
+  const event={id:'release',at:new Date(f.options.now()).toISOString(),track:'beta',name:'1.1',versionCodes:['2'],after:STATES[0]};
+  await n.process(profile,[event]);
+  const original=n.status(profile).deliveries.find(d=>d.id===event.id);
+  n.configure(profile,{enabled:false,states:STATES,mentionAll:false,targets:config.targets.map(({id})=>({id}))});
+  const receiver=config.targets[1];
+  const state=await n.sendToTarget(profile,original.id,receiver.id);
+  assert.equal(requests.length,3);
+  const {target,body}=requests[2];
+  assert.equal(target,otherUrl);
+  assert.equal(body.sign,sign(body.timestamp,'receiver'));
+  assert.equal(body.content.text,original.text);
+  assert.equal(state.deliveries[0].kind,'manual');
+  assert.equal(state.deliveries[0].targetName,receiver.name);
+  assert.equal(state.deliveries[0].status,'sent');
+  n=f.make();
+  assert.deepEqual(n.status(profile).deliveries,state.deliveries);
+  assert.deepEqual(state.deliveries.find(d=>d.id===original.id),original);
+  await assert.rejects(n.sendToTarget(profile,original.id,'removed'),/已保存/);
+  await assert.rejects(n.sendToTarget(profile,'missing',receiver.id),/找不到/);
+  await assert.rejects(n.sendToTarget({...profile,id:'other'},original.id,receiver.id),/找不到/);
+  assert.equal(requests.length,3);
+});
 function fixture(t,fetchImpl){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gp-notify-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));let time=1700000000000;const options={file:path.join(dir,'notifications.json'),protect,fetchImpl,now:()=>time};return {options,make:()=>createNotifier(options),advance:()=>time+=1000};}
+test('an interrupted manual send keeps its own result and an overlapping review check still delivers',async t=>{
+  let finishManual;
+  const requests=[];
+  const f=fixture(t,async(target,options)=>{
+    requests.push(JSON.parse(options.body).content.text);
+    if(requests.length===2)return new Promise((_,reject)=>{finishManual=()=>reject(Error('timeout'));});
+    return Response.json({code:0});
+  });
+  f.options.sleep=async()=>{};
+  const n=f.make();
+  n.configure(profile,{enabled:true,states:STATES,webhook:url});
+  const event={id:'first',at:new Date(f.options.now()).toISOString(),track:'production',name:'1',versionCodes:['1'],after:STATES[0]};
+  await n.process(profile,[event]);
+  const manual=n.sendToTarget(profile,event.id,'primary');
+  assert.throws(()=>n.sendToTarget(profile,event.id,'primary'),/正在发送/);
+  const check=n.process(profile,[{...event,id:'next',name:'2'},event]);
+  finishManual();
+  const result=await manual;
+  assert.equal(result.deliveries[0].status,'uncertain');
+  await check;
+  assert.equal(requests.length,3);
+  assert.equal(requests[0],requests[1]);
+  assert.match(requests[2],/版本：2/);
+  assert.equal(n.status(profile).deliveries.find(d=>d.id===event.id).status,'sent');
+});
 test('in-review opt-in ignores past events and preserves deduplication across restart',async t=>{
   const bodies=[],f=fixture(t,async(_,opts)=>{bodies.push(JSON.parse(opts.body));return Response.json({code:0});});
   let n=f.make();const approved='RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED';

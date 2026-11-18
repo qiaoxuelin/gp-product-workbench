@@ -533,7 +533,27 @@ async function feishuDialog(profileId=reviewProjectId){
   drawRobots();bind('feishuAddTarget',()=>{if(robots.length>=10)throw Error('最多配置 10 个群机器人');robots=readRobots();robots.push({name:'群机器人 '+(robots.length+1)});drawRobots();});
   const draw=s=>{
     const names={pending:'待发送',sending:'发送中',sent:'已发送',failed:'发送失败',uncertain:'结果不明'};
-    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>'<div class="result-row"><b>'+esc((d.kind==='test'?'测试通知':'审核通知')+' · '+(d.targetName||'群机器人 1')+' · '+names[d.status]+' · '+reviewTime(d.sentAt||d.at))+'</b><p style="white-space:pre-wrap">'+feishuText(d.text)+'</p>'+(d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+(['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'')+'</div>').join(''):'<p class="help">暂无发送记录。</p>');
+    const kinds={event:'审核通知',test:'测试通知',manual:'手动发送'};
+    const targets=s.targets||[];
+    const options=targets.map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('');
+    $('feishuResults').innerHTML='<h3>最近通知</h3>'+(s.deliveries.length?s.deliveries.map((d,i)=>{
+      const heading=[kinds[d.kind]||'审核通知',d.targetName||'群机器人 1',names[d.status],reviewTime(d.sentAt||d.at)].join(' · ');
+      const retry=['failed','uncertain'].includes(d.status)?'<button id="feishuRetry'+i+'">查看重试</button>':'';
+      const picker='<details><summary>发送到指定群</summary>'+(targets.length?
+        '<label>接收群 <select id="feishuGroup'+i+'"><option value="">请选择群</option>'+options+'</select></label> <button type="button" id="feishuForward'+i+'">确认发送</button>':
+        '<p class="help">请先在上方保存接收群的机器人。</p>')+'</details>';
+      return '<div class="result-row"><b>'+esc(heading)+'</b><p style="white-space:pre-wrap">'+feishuText(d.text)+'</p>'+
+        (d.error?'<p class="error-box">'+esc(d.error)+'</p>':'')+retry+picker+'</div>';
+    }).join(''):'<p class="help">暂无发送记录。</p>');
+    if(targets.length)s.deliveries.forEach((d,i)=>bind('feishuForward'+i,async()=>{
+      const targetId=$('feishuGroup'+i).value;
+      if(!targetId)throw Error('请先选择接收群');
+      if($('modalError')?.dataset.message==='请先选择接收群')$('modalError').remove();
+      const result=await job(()=>api('monitor/feishu/send-to-target',{mode:'live',profileId,id:d.id,targetId}),'正在向所选群发送通知…');
+      draw(result);
+      const entry=result.deliveries[0];
+      status(entry.targetName+' · '+names[entry.status],entry.status!=='sent');
+    }));
     s.deliveries.forEach((d,i)=>{if(['failed','uncertain'].includes(d.status))bind('feishuRetry'+i,()=>modal('重试这条通知？','<p>此操作会发送到当前保存的飞书群。若之前显示“结果不明”，请先查看群消息，重试可能造成重复。</p><pre style="white-space:pre-wrap">'+feishuText(d.text)+'</pre>',[{label:'返回',run:()=>feishuDialog(profileId)},{label:'确认重试发送',class:'primary',run:async()=>{await job(()=>api('monitor/feishu/retry',{mode:'live',profileId,id:d.id}),'正在重试发送…');await feishuDialog(profileId);}}]));});
   };
   draw(state);
