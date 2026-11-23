@@ -34,14 +34,16 @@ function createNotifier({file,protect,fetchImpl=fetch,now=()=>Date.now(),sleep=m
         previous=targetInfo(old).map(({id,name,hasSecret})=>({id,name,hasSecret}));
       }
     }
-    const inputs=input.targets===undefined?[{id:'primary',webhook:input.webhook,secret:input.secret,clearSecret:input.clearSecret},...previous.filter(t=>t.id!=='primary').map(t=>({id:t.id}))]:input.targets;
+    const firstId=previous.find(t=>t.id==='primary')?.id||previous[0]?.id;
+    const inputs=input.targets===undefined?[{id:firstId,webhook:input.webhook,secret:input.secret,clearSecret:input.clearSecret},...previous.filter(t=>t.id!==firstId).map(t=>({id:t.id}))]:input.targets;
     if(!Array.isArray(inputs)||inputs.length>10)throw Error('最多配置 10 个群机器人');
     const targets=inputs.map((entry,index)=>{
       if(!entry||typeof entry!=='object')throw Error('机器人配置无效');
       const prior=previous.find(t=>t.id===entry.id);
       if(recovery&&(!entry.webhook?.trim()||(prior?.hasSecret&&!entry.secret?.trim()&&!entry.clearSecret)))throw Error('旧机器人配置无法解密：请重新填写每个保留机器人的 Webhook；原来保存过签名密钥的机器人还需重新填写密钥，或勾选清除已保存的签名密钥');
       if(entry.id&&!prior&&entry.id!=='primary')throw Error('机器人已不存在，请重新打开配置');
-      const id=prior?.id||((index===0&&!previous.length)?'primary':crypto.randomUUID());
+      // Only the initial configuration may claim the legacy primary delivery history.
+      const id=prior?.id||((index===0&&!previous.length&&!old.targets)?'primary':crypto.randomUUID());
       const target={id,name:String(entry.name||prior?.name||('群机器人 '+(index+1))).trim().slice(0,80),webhook:prior?.webhook||'',secret:prior?.secret||''};
       if(entry.webhook?.trim())target.webhook=webhook(entry.webhook);
       if(entry.clearSecret)target.secret='';
@@ -110,6 +112,7 @@ function createNotifier({file,protect,fetchImpl=fetch,now=()=>Date.now(),sleep=m
     const s=current(profile);if(!s.sealed)throw Error('请先保存 Webhook');
     const targets=targetInfo(s);
     for(let i=0;i<targets.length;i++){
+      if(current(profile)!==s)break;
       const target=targets[i],id='test-'+crypto.randomUUID();
       s.deliveries.unshift({id,targetId:target.id,targetName:target.name,kind:'test',status:'pending',text:withMention('PlayBatch · 飞书机器人测试通知\n项目：'+clean(profile.name||profile.packageName)+'\n这是一条测试消息，不代表应用已过审或发布。',s.mentionAll===true),at:new Date(now()).toISOString()});
       data[profile.id]=s;write();await deliver(profile,id);if(i<targets.length-1)await sleep(1050);

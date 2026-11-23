@@ -116,6 +116,34 @@ test('Windows DPAPI can protect and restore webhook settings without returning p
   n.configure(profile,{enabled:false,states:STATES,webhook:'',secret:''});assert.equal(n.status(profile).hasSecret,true);
 });
 
+test('Windows encrypted robot settings round-trip Unicode names and signing secrets', {skip:process.platform!=='win32'},async t=>{
+  const secret='测试密钥🌊',name='运营群',f=fixture(t,async(_,options)=>{
+    const {timestamp,sign:signature}=JSON.parse(options.body);
+    assert.equal(signature,sign(timestamp,secret));
+    return Response.json({code:0});
+  });
+  f.options.protect=require('../credentials').protect;
+  f.make().configure(profile,{enabled:true,states:STATES,targets:[{name,webhook:url,secret}]});
+  const n=f.make();
+  const state=n.configure(profile,{enabled:true,states:STATES,targets:[{id:'primary'}]});
+  assert.equal(state.targets[0].name,name);
+  assert.equal((await n.test(profile)).deliveries[0].status,'sent');
+});
+
+test('a group added after clearing cannot receive retries intended for the removed group',async t=>{
+  let calls=0;
+  const f=fixture(t,async()=>{calls++;return Response.json({code:1});});
+  const n=f.make();
+  n.configure(profile,{enabled:true,states:STATES,targets:[{webhook:url}]});
+  const [failed]=(await n.test(profile)).deliveries;
+  n.configure(profile,{enabled:false,states:STATES,targets:[]});
+  const restarted=f.make();
+  restarted.configure(profile,{enabled:true,states:STATES,targets:[{webhook:url.replace('11111111','99999999')}]});
+  const result=await restarted.retry(profile,failed.id);
+  assert.equal(calls,1);
+  assert.match(result.deliveries[0].error,/已移除/);
+});
+
 test('mention-all defaults off for existing configs, persists per project and validates input',async t=>{
   const bodies=[],f=fixture(t,async(target,opts)=>{bodies.push(JSON.parse(opts.body));return Response.json({code:0});});let n=f.make();
   n.configure(profile,{enabled:true,states:STATES,webhook:url});

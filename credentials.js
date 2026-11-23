@@ -8,7 +8,7 @@ function parseCredential(text){
 }
 function protect(input,decrypt=false){
   if(process.platform!=='win32')throw Error('凭据加密需要 Windows 当前用户环境');
-  const script="Add-Type -AssemblyName System.Security; $inputText=[Console]::In.ReadToEnd(); "+(decrypt?
+  const script="[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.Security; $inputText=[Console]::In.ReadToEnd(); "+(decrypt?
     "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($inputText),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))":
     "[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($inputText),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))");
   try{return execFileSync(path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',script],{input,encoding:'utf8',windowsHide:true,timeout:15000,maxBuffer:1024*1024,stdio:['pipe','pipe','pipe']}).trim();}

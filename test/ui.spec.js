@@ -541,6 +541,7 @@ test('Feishu notification settings hide secrets and only send a test on explicit
   await page.goto('/');await page.locator('#reviewMonitor').click();await page.locator('#reviewFeishu').click();
   await expect(page.locator('#feishuMentionAll')).not.toBeChecked();
   await page.locator('#feishuMentionAll').check();
+  await page.locator('#feishuAddTarget').click();
   await page.locator('#feishuEnabled').check();await page.locator('#feishuWebhook').fill('https://open.feishu.cn/open-apis/bot/v2/hook/11111111-2222-3333-4444-555555555555');
   await page.locator('#feishuSave').click();await expect(page.locator('#feishuWebhook')).toHaveValue('');expect(tests).toBe(0);expect(payload.profileId).toBe('notify');expect(payload.mentionAll).toBe(true);
   await page.getByRole('button',{name:'返回审核监控',exact:true}).click();await page.locator('#reviewFeishu').click();await expect(page.locator('#feishuMentionAll')).toBeChecked();
@@ -640,6 +641,55 @@ test('a single recent notification can be sent to an explicitly selected group',
  await expect(page.locator('#feishuResults .result-row').first()).toContainText('手动发送 · 测试群 · 已发送');
  await expect(page.locator('#modalError')).toHaveCount(0);
  expect(requests).toEqual([{mode:'live',profileId:p.id,id:'1.0',targetId:'qa'}]);
+});
+
+test('Feishu group additions and removals persist when settings reopen',async({page,request})=>{
+ const {token}=await (await request.get('/api/session')).json();
+ const response=await request.post('/api/config/save',{headers:{'X-GP-Token':token},data:{name:'通知设置测试',packageName:'com.test.robotsettings'}});
+ expect(response.ok()).toBeTruthy();
+ const profile=(await response.json()).current;
+ await mockProjects(page,'google',[profile]);
+ await page.addInitScript(id=>localStorage.setItem('gp-last-visit-v1',JSON.stringify({mode:'live',projectId:id})),profile.id);
+ await page.route('**/api/products',r=>r.fulfill({json:{products:[]}}));
+ const open=async()=>{
+   await page.goto('/');
+   await page.locator('#reviewMonitor').click();
+   await page.locator('#reviewFeishu').click();
+ };
+ const rows=page.locator('#feishuTargets fieldset');
+ const add=async(name,hook)=>{
+   await page.locator('#feishuAddTarget').click();
+   await rows.last().getByLabel('备注名称').fill(name);
+   await rows.last().getByLabel('机器人 Webhook').fill('https://open.feishu.cn/open-apis/bot/v2/hook/'+hook);
+ };
+ const save=async()=>{
+   const saved=page.waitForResponse(r=>r.url().endsWith('/api/monitor/feishu/config'));
+   await page.locator('#feishuSave').click();
+   expect(await (await saved).json()).not.toHaveProperty('error');
+   await expect(page.locator('#status')).toHaveText('飞书通知设置已保存');
+ };
+ await open();
+ await add('运营群','11111111-2222-3333-4444-555555555555');
+ await page.locator('#feishuEnabled').check();
+ await save();
+ await open();
+ await expect(rows).toHaveCount(1);
+ await add('审核群','99999999-2222-3333-4444-555555555555');
+ await save();
+ await rows.first().getByRole('button',{name:'移除此机器人'}).click();
+ await save();
+ await open();
+ await expect(rows).toHaveCount(1);
+ await expect(rows.getByLabel('备注名称')).toHaveValue('审核群');
+ await rows.getByRole('button',{name:'移除此机器人'}).click();
+ await save();
+ await open();
+ await expect(rows).toHaveCount(0);
+ await expect(page.locator('#feishuEnabled')).not.toBeChecked();
+ await add('新群','88888888-2222-3333-4444-555555555555');
+ await save();
+ await open();
+ await expect(rows.getByLabel('备注名称')).toHaveValue('新群');
 });
 
 test('multiple Feishu webhooks and in-review state can be configured without sending',async({page})=>{

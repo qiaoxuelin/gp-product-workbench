@@ -524,11 +524,17 @@ async function feishuDialog(profileId=reviewProjectId){
     '<details><summary>如何准备飞书机器人？</summary><ol><li>在接收通知的飞书群中打开“设置 → 群机器人 → 添加机器人 → 自定义机器人”。</li><li>复制 Webhook 到上方；若开启签名校验，一并填写签名密钥。</li><li>若使用关键词限制，添加关键词 PlayBatch。若使用 IP 白名单，需允许本机网络的出口 IP。</li><li>保存后点击测试通知，在群里确认收到。</li></ol><p><a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot" target="_blank" rel="noreferrer">飞书官方配置指南 ↗</a></p></details>'+
     '<div class="finance-actions"><button id="feishuSave">保存通知设置</button><button id="feishuTest">发送测试通知到群</button></div><div id="feishuResults"></div>',
     [{label:'返回审核监控',run:close},{label:'关闭',run:close}]);
-  let robots=state.targets?.length?state.targets:[{id:'primary',name:'群机器人 1',hasWebhook:state.hasWebhook,hasSecret:state.hasSecret}];
+  const savedRobots=s=>s.targets??(s.hasWebhook?[{id:'primary',name:'群机器人 1',hasWebhook:true,hasSecret:s.hasSecret}]:[]);
+  let robots=savedRobots(state);
   const readRobots=()=>robots.map((r,i)=>({...r,name:$('feishuName'+i).value.trim(),webhook:$(i?'feishuWebhook'+i:'feishuWebhook').value.trim(),secret:$(i?'feishuSecret'+i:'feishuSecret').value.trim(),clearSecret:$(i?'feishuClearSecret'+i:'feishuClearSecret').checked}));
   function drawRobots(){
-    $('feishuTargets').innerHTML=robots.map((r,i)=>'<fieldset><legend>'+esc(r.name||('群机器人 '+(i+1)))+'</legend><div class="form-grid"><label class="field wide">备注名称<input id="feishuName'+i+'" value="'+esc(r.name||'')+'"></label><label class="field wide">机器人 Webhook<input type="password" autocomplete="new-password" id="'+(i?'feishuWebhook'+i:'feishuWebhook')+'" value="'+esc(r.webhook||'')+'" placeholder="'+(r.hasWebhook?'已加密保存，留空保留':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label><label class="field wide">签名密钥（可选）<input type="password" autocomplete="new-password" id="'+(i?'feishuSecret'+i:'feishuSecret')+'" value="'+esc(r.secret||'')+'" placeholder="'+(r.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label><label class="checkline wide"><input type="checkbox" id="'+(i?'feishuClearSecret'+i:'feishuClearSecret')+'" '+(r.clearSecret?'checked':'')+'>清除已保存的签名密钥</label></div>'+(robots.length>1?'<button type="button" data-remove-robot="'+i+'">移除此机器人</button>':'')+'</fieldset>').join('');
-    document.querySelectorAll('[data-remove-robot]').forEach(button=>button.onclick=()=>{robots=readRobots();robots.splice(Number(button.dataset.removeRobot),1);drawRobots();});
+    $('feishuTargets').innerHTML=robots.map((r,i)=>'<fieldset><legend>'+esc(r.name||('群机器人 '+(i+1)))+'</legend><div class="form-grid"><label class="field wide">备注名称<input id="feishuName'+i+'" value="'+esc(r.name||'')+'"></label><label class="field wide">机器人 Webhook<input type="password" autocomplete="new-password" id="'+(i?'feishuWebhook'+i:'feishuWebhook')+'" value="'+esc(r.webhook||'')+'" placeholder="'+(r.hasWebhook?'已加密保存，留空保留':'https://open.feishu.cn/open-apis/bot/v2/hook/…')+'"></label><label class="field wide">签名密钥（可选）<input type="password" autocomplete="new-password" id="'+(i?'feishuSecret'+i:'feishuSecret')+'" value="'+esc(r.secret||'')+'" placeholder="'+(r.hasSecret?'已保存，留空保留':'机器人开启签名校验时填写')+'"></label><label class="checkline wide"><input type="checkbox" id="'+(i?'feishuClearSecret'+i:'feishuClearSecret')+'" '+(r.clearSecret?'checked':'')+'>清除已保存的签名密钥</label></div>'+'<button type="button" data-remove-robot="'+i+'">移除此机器人</button></fieldset>').join('')||'<p class="help">尚未配置群机器人。</p>';
+    document.querySelectorAll('[data-remove-robot]').forEach(button=>button.onclick=()=>{
+      robots=readRobots();
+      robots.splice(Number(button.dataset.removeRobot),1);
+      if(!robots.length)$('feishuEnabled').checked=false;
+      drawRobots();
+    });
   }
   drawRobots();bind('feishuAddTarget',()=>{if(robots.length>=10)throw Error('最多配置 10 个群机器人');robots=readRobots();robots.push({name:'群机器人 '+(robots.length+1)});drawRobots();});
   const draw=s=>{
@@ -559,10 +565,11 @@ async function feishuDialog(profileId=reviewProjectId){
   draw(state);
   bind('feishuSave',async()=>{
     const states=[];if($('feishuInReview').checked)states.push('RELEASE_LIFECYCLE_STATE_IN_REVIEW');if($('feishuApproved').checked)states.push('RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED');if($('feishuPublished').checked)states.push('RELEASE_LIFECYCLE_STATE_PUBLISHED');
-    const payload={targets:readRobots(),mode:'live',profileId,enabled:$('feishuEnabled').checked,mentionAll:$('feishuMentionAll').checked,states,webhook:$('feishuWebhook').value.trim(),secret:$('feishuSecret').value.trim(),clearSecret:$('feishuClearSecret').checked};
+    const payload={targets:readRobots(),mode:'live',profileId,enabled:$('feishuEnabled').checked,mentionAll:$('feishuMentionAll').checked,states};
     const result=await job(()=>api('monitor/feishu/config',payload),'正在加密保存通知设置…');
-    robots=result.targets?.length?result.targets:[{id:'primary',name:'群机器人 1',hasWebhook:result.hasWebhook,hasSecret:result.hasSecret}];drawRobots();
-    $('feishuWebhook').placeholder=result.hasWebhook?'已加密保存，留空保留':'请输入 Webhook';$('feishuSecret').placeholder=result.hasSecret?'已保存，留空保留':'可选签名密钥';draw(result);status('飞书通知设置已保存');
+    robots=savedRobots(result);drawRobots();
+    $('modalError')?.remove();
+    draw(result);status('飞书通知设置已保存');
   });
   bind('feishuTest',async()=>{const result=await job(()=>api('monitor/feishu/test',{mode:'live',profileId}),'正在向已保存的飞书群发送测试通知…');draw(result);status(result.deliveries.filter(d=>d.kind==='test').slice(0,robots.length).every(d=>d.status==='sent')?'测试通知已发送，请查看各飞书群':'部分测试未确认成功，请查看各机器人的发送记录');});
 }
